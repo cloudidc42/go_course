@@ -12,8 +12,9 @@
 6. Nested structs (struct ซ้อน struct)
 7. Array และ slice ของ struct
 8. Struct copying semantics — struct เป็น value type แท้ๆ
-9. สรุปสิ่งที่ได้เรียนในบทนี้
-10. แบบฝึกหัดท้ายบท
+9. Constructor pattern: ฟังก์ชัน `NewXxx` สำหรับสร้าง struct
+10. สรุปสิ่งที่ได้เรียนในบทนี้
+11. แบบฝึกหัดท้ายบท
 
 ---
 
@@ -418,6 +419,60 @@ after modify: {1 2}
 
 ---
 
+## 9. Constructor pattern: ฟังก์ชัน `NewXxx` สำหรับสร้าง struct
+
+Go ไม่มี concept "constructor" ในตัวภาษาแบบภาษาเชิงวัตถุอื่นๆ (ไม่มี keyword `constructor` หรือ method พิเศษที่เรียกอัตโนมัติตอนสร้าง object) แต่ชุมชน Go มีธรรมเนียมที่ยึดถือกันอย่างกว้างขวางในการเขียนฟังก์ชันชื่อ **`NewXxx`** (ขึ้นต้นด้วย `New` ตามด้วยชื่อ type) เพื่อทำหน้าที่เป็น constructor แทน โดยเฉพาะเมื่อการสร้าง struct นั้นต้องมีการตรวจสอบความถูกต้องของข้อมูล (validation) หรือกำหนดค่าเริ่มต้นบางอย่างที่ struct literal ธรรมดาทำไม่ได้
+
+```go
+package main
+
+import (
+	"errors"
+	"fmt"
+)
+
+type Account struct {
+	Owner   string
+	Balance float64
+}
+
+// NewAccount คือ constructor function - แนวทางมาตรฐานของ Go ในการสร้าง struct
+// ที่ต้องมีการตรวจสอบความถูกต้องของข้อมูลก่อนสร้าง
+func NewAccount(owner string, initialBalance float64) (*Account, error) {
+	if owner == "" {
+		return nil, errors.New("owner cannot be empty")
+	}
+	if initialBalance < 0 {
+		return nil, errors.New("initial balance cannot be negative")
+	}
+	return &Account{Owner: owner, Balance: initialBalance}, nil
+}
+
+func main() {
+	acc, err := NewAccount("Dave", 500)
+	if err != nil {
+		fmt.Println("error:", err)
+	} else {
+		fmt.Println(*acc) // {Dave 500}
+	}
+
+	_, err2 := NewAccount("", 100)
+	fmt.Println(err2) // owner cannot be empty
+}
+```
+
+รูปแบบนี้ผสมผสานความรู้จากหลาย Part ที่เรียนมาแล้วเข้าด้วยกัน: **multiple return values** พร้อม `error` เป็นค่าสุดท้าย (Part 008), การคืน **pointer** ไปยัง struct ที่สร้างขึ้นใหม่ ซึ่งปลอดภัยเพราะ escape analysis (Part 010), และ **struct literal** แบบ keyed (หัวข้อที่ 5 ของบทนี้)
+
+### ทำไมต้องใช้ constructor function แทน struct literal ตรงๆ
+
+1. **Validate ข้อมูลก่อนสร้าง** — struct literal ธรรมดา (`Account{Owner: "", Balance: -100}`) ไม่มีทางป้องกันไม่ให้สร้างข้อมูลที่ไม่ถูกต้องได้เลย ในขณะที่ `NewAccount` เช็คเงื่อนไขและคืน `error` กลับไปทันทีถ้าข้อมูลไม่ถูกต้อง
+2. **ซ่อนรายละเอียดการสร้างที่ซับซ้อน** — ถ้าการสร้าง struct ต้องมีการคำนวณค่าเริ่มต้นบางอย่าง (เช่น generate ID, ตั้งค่า timestamp) `NewXxx` ช่วยรวบรวม logic นั้นไว้ในที่เดียว ผู้เรียกใช้ไม่ต้องรู้รายละเอียดภายใน
+3. **คงความเข้ากันได้เมื่อ struct เปลี่ยนแปลงในอนาคต** — ถ้ามีการเพิ่ม field ใหม่ที่ต้องคำนวณค่าเริ่มต้นเสมอ (ไม่ใช่แค่ zero value) การแก้ไขแค่ใน `NewXxx` ที่เดียวสะดวกกว่าการไล่แก้ไข struct literal ที่กระจายอยู่ทั่วทั้งโปรแกรม
+
+โดยทั่วไปแล้ว เมื่อ struct มี field ทั้งหมดที่ไม่ต้องการ validation หรือ zero value ก็เพียงพอสำหรับใช้งานได้ปกติ การสร้างด้วย keyed literal ตรงๆ ก็เพียงพอแล้วไม่จำเป็นต้องมี `NewXxx` แต่เมื่อ struct เริ่มมีเงื่อนไขความถูกต้องที่ต้องรักษาไว้เสมอ (invariant) — เช่น field ต้องไม่ว่าง หรือค่าต้องอยู่ในช่วงที่กำหนด — การใช้ constructor pattern แบบนี้ถือเป็นแนวทางที่ idiomatic และพบเห็นได้ทั่วไปในโค้ด Go ระดับ production รวมถึงในตัว standard library เอง (เช่น `time.NewTicker`, `bufio.NewReader` ที่จะพบในภาคหลังของหลักสูตรนี้)
+
+---
+
 ## สรุปสิ่งที่ได้เรียนในบทนี้
 
 - Struct รวม field หลายตัวเข้าเป็นหน่วยเดียว ประกาศด้วย `type ชื่อ struct { field type }` — zero value คือ struct ที่ทุก field เป็น zero value ของตัวเอง
@@ -428,6 +483,7 @@ after modify: {1 2}
 - Nested struct คือ struct ที่มี field เป็น struct อีกตัวหนึ่ง เข้าถึง field ที่ซ้อนกันด้วยการต่อ `.` ตามลำดับชั้น
 - Struct ใช้เป็น element ของ array/slice ได้ปกติ แต่ต้องระวังว่า `range` คืนค่า copy ของ struct มาให้เสมอ การแก้ไขต้องทำผ่าน index โดยตรงจึงจะกระทบข้อมูลต้นฉบับ
 - Struct เป็น **value type แท้ๆ**: assign หรือส่งเข้าฟังก์ชันจะ copy ทุก field ทั้งก้อนทันที ต่างจาก slice/map ที่มีพฤติกรรมแบบ reference-like — ถ้าต้องการแก้ไขต้นฉบับต้องส่งผ่าน pointer (Part 010)
+- Constructor pattern (`NewXxx`) เป็นธรรมเนียมของ Go สำหรับสร้าง struct ที่ต้อง validate ข้อมูลหรือกำหนดค่าเริ่มต้นก่อนใช้งาน คืนค่าเป็น `(*T, error)` ตามแบบแผน multiple return values
 
 ## แบบฝึกหัดท้ายบท
 
@@ -437,6 +493,7 @@ after modify: {1 2}
 4. เขียนโปรแกรมที่มี slice ของ struct `Student{Name string, Score int}` แล้วทดลองเขียนฟังก์ชันที่พยายามเพิ่มคะแนนให้ทุกคนผ่าน `range` ตรงๆ (จะไม่ได้ผล) เทียบกับการแก้ไขผ่าน index (`for i := range`) แล้วพิสูจน์ด้วยการรันจริงว่าแบบไหนได้ผลลัพธ์ที่ถูกต้อง
 5. สร้าง package แยกที่มี struct หนึ่งตัว แล้วในอีก package หนึ่งลองสร้าง struct literal แบบ positional เพื่อดูคำเตือนจาก `go vet ./...` ด้วยตัวเอง แล้วแก้เป็น keyed literal เพื่อให้คำเตือนหายไป
 6. เขียนฟังก์ชันสองตัวที่รับ struct ขนาดใหญ่ (มีหลาย field) ตัวหนึ่งรับแบบ value ตัวหนึ่งรับแบบ pointer แล้วทั้งคู่พยายามแก้ไข field ภายใน พิสูจน์ด้วยการรันจริงว่าตัวไหนกระทบ struct ต้นฉบับ และอธิบายเหตุผลด้วยหลักการ value type ที่เรียนในบทนี้
+7. เขียน constructor function `NewRectangle(width, height float64) (*Rectangle, error)` ที่คืน error ถ้า `width` หรือ `height` เป็นค่าลบหรือเท่ากับศูนย์ แล้วทดลองเรียกใช้ทั้งกรณีที่ข้อมูลถูกต้องและไม่ถูกต้อง
 
 ---
 
