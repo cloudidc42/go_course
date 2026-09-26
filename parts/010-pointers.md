@@ -13,8 +13,9 @@
 7. เมื่อไรควรใช้ pointer receiver เทียบกับ value receiver (preview ของ Part 012)
 8. Pointer กับ `nil`
 9. Pitfall ที่พบบ่อย: คืน pointer ไปยังตัวแปร local ปลอดภัยใน Go เพราะ escape analysis
-10. สรุปสิ่งที่ได้เรียนในบทนี้
-11. แบบฝึกหัดท้ายบท
+10. ตัวอย่างประยุกต์: self-referencing struct และ linked list
+11. สรุปสิ่งที่ได้เรียนในบทนี้
+12. แบบฝึกหัดท้ายบท
 
 ---
 
@@ -388,6 +389,49 @@ Go compiler มีขั้นตอนที่เรียกว่า **escap
 จุดสำคัญคือ **ในฐานะโปรแกรมเมอร์ Go เราแทบไม่จำเป็นต้องคิดเรื่อง stack กับ heap เองเลยในการเขียนโปรแกรมทั่วไป** — เขียนโค้ดตามความหมายทางตรรกะที่ต้องการได้เลย (คืน pointer เมื่อจำเป็นต้องคืน) แล้วปล่อยให้ compiler ตัดสินใจเรื่องการจัดสรรหน่วยความจำที่ถูกต้องและปลอดภัยให้เอง นี่คือหนึ่งในเหตุผลสำคัญที่ทำให้ Go เขียนโปรแกรมได้เร็วและปลอดภัยกว่า C มาก โดยไม่ต้องแลกด้วย garbage collector ที่หนักเกินไป (ตรงข้ามกับภาษาที่มี GC จำนวนมาก Go ออกแบบ GC ให้มี latency ต่ำมาก เหมาะกับงาน backend/infrastructure ที่ต้องการ response time สม่ำเสมอ — จะเรียนเจาะลึกเรื่องนี้ใน Part 055)
 
 **ข้อควรรู้เพิ่มเติม (ไม่ต้องกังวลตอนนี้)**: การที่ตัวแปรจำนวนมาก "escape" ไป heap มีผลด้าน performance เพราะการจัดสรรและเก็บกวาดหน่วยความจำบน heap มีค่าใช้จ่ายสูงกว่าการใช้ stack ล้วนๆ ในโปรแกรมที่ต้องการ performance สูงสุด นักพัฒนาระดับสูงอาจใช้คำสั่ง `go build -gcflags="-m"` เพื่อดูว่าตัวแปรใดบ้าง escape ไป heap และพยายามลดจำนวนนั้นลง — เนื้อหานี้จะกลับมาเจาะลึกอีกครั้งในภาคที่ 7 เรื่อง Performance (โดยเฉพาะ Part 085)
+
+---
+
+## 10. ตัวอย่างประยุกต์: self-referencing struct และ linked list
+
+หนึ่งในตัวอย่างที่แสดงพลังของ pointer ได้ชัดเจนที่สุดคือการสร้าง struct ที่มี field เป็น pointer ของ **type ตัวเอง** เรียกว่า **self-referencing struct** ซึ่งเป็นรากฐานของโครงสร้างข้อมูลอย่าง linked list, tree, และ graph
+
+```go
+package main
+
+import "fmt"
+
+// Node คือโหนดหนึ่งของ linked list โดยใช้ pointer เพื่อเชื่อมไปยังโหนดถัดไป
+type Node struct {
+	Value int
+	Next  *Node
+}
+
+// push เพิ่มโหนดใหม่ไว้ที่หัว list แล้วคืน pointer ไปยังหัว list ใหม่
+func push(head *Node, value int) *Node {
+	return &Node{Value: value, Next: head}
+}
+
+func printList(head *Node) {
+	for n := head; n != nil; n = n.Next {
+		fmt.Printf("%d ", n.Value)
+	}
+	fmt.Println()
+}
+
+func main() {
+	var head *Node // list ว่างเปล่า เริ่มจาก nil
+	head = push(head, 3)
+	head = push(head, 2)
+	head = push(head, 1)
+
+	printList(head) // 1 2 3
+}
+```
+
+จุดที่น่าสนใจคือ `Node` มี field `Next` ที่เป็น type `*Node` (pointer ไปยัง `Node` ตัวเอง) ซึ่งเป็นสิ่งที่**ทำได้เฉพาะกับ pointer เท่านั้น** ถ้าลองเปลี่ยน `Next *Node` เป็น `Next Node` ตรงๆ (ไม่ใช่ pointer) จะเกิด compile error ทันที เพราะ Go ต้องรู้ขนาด (size) ของ struct ที่แน่นอนตั้งแต่ compile time — ถ้า `Node` มี field เป็น `Node` ตัวเองตรงๆ ขนาดของมันจะคำนวณไม่ได้เลย (วนไม่รู้จบ: ขนาดของ `Node` ขึ้นกับขนาดของ `Node` ที่ขึ้นกับขนาดของ `Node` ...) แต่ pointer มีขนาดคงที่เสมอไม่ว่าจะชี้ไปยัง type อะไร (ปกติ 8 byte บนระบบ 64-bit) ทำให้ `*Node` มีขนาดที่แน่นอนและ compiler คำนวณขนาดของ `Node` ทั้งก้อนได้โดยไม่มีปัญหา
+
+การใช้ `nil` เป็นค่าสิ้นสุดของ list (`n.Next == nil` หมายถึง "ไม่มีโหนดถัดไปแล้ว") ก็คือการนำหลักการ pointer กับ `nil` จากหัวข้อที่ 8 มาใช้งานจริงโดยตรง — pattern การเดิน list ด้วย `for n := head; n != nil; n = n.Next` แบบนี้เป็นรูปแบบมาตรฐานที่พบได้ทั่วไปเมื่อทำงานกับโครงสร้างข้อมูลที่เชื่อมโยงกันด้วย pointer ไม่ว่าจะเป็น linked list, binary tree, หรือโครงสร้างกราฟที่ซับซ้อนกว่านั้น
 
 ---
 
