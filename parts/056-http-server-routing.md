@@ -222,7 +222,7 @@ type statusInterceptor struct {
 	status int
 }
 
-func (w *statusInterceptor) WriteHeader(code int) { w.status = code }
+func (w *statusInterceptor) WriteHeader(code int)        { w.status = code }
 func (w *statusInterceptor) Write(b []byte) (int, error) { return len(b), nil }
 ```
 
@@ -409,7 +409,7 @@ type statusInterceptor struct {
 	status int
 }
 
-func (w *statusInterceptor) WriteHeader(code int) { w.status = code }
+func (w *statusInterceptor) WriteHeader(code int)        { w.status = code }
 func (w *statusInterceptor) Write(b []byte) (int, error) { return len(b), nil }
 
 func withJSONErrors(mux *http.ServeMux) http.Handler {
