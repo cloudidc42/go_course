@@ -148,6 +148,47 @@ WARN: 2026/09/26 02:49:11 disk usage above 80%
 
 การสร้าง logger แยกตัวแบบนี้มีประโยชน์เมื่อต้องการแยก log แต่ละหมวดหมู่ (เช่น logger สำหรับ audit log แยกจาก logger สำหรับ debug log) หรือต้องการส่ง log ไปยังไฟล์เฉพาะ (ส่ง `*os.File` ที่เปิดด้วย `os.OpenFile` เป็น `out` แทน `os.Stdout`)
 
+### ปรับ default logger ของ package `log` เองได้เช่นกัน
+
+นอกจากสร้าง logger ใหม่ด้วย `log.New` แล้ว เรายังปรับพฤติกรรมของ **default logger** (ตัวที่ `log.Println`/`log.Printf` เรียกใช้อยู่เบื้องหลัง) ได้โดยตรงผ่าน `log.SetOutput`, `log.SetPrefix`, และ `log.SetFlags`:
+
+```go
+package main
+
+import (
+	"bytes"
+	"fmt"
+	"log"
+	"os"
+)
+
+func main() {
+	var buf bytes.Buffer
+
+	log.SetOutput(&buf) // เปลี่ยนปลายทางของ default logger จาก stderr ไปที่ buffer
+	log.SetPrefix("[GLOBAL] ")
+	log.SetFlags(log.Lshortfile)
+
+	log.Println("this goes into buf, not stderr")
+	fmt.Print("captured: ", buf.String())
+
+	// คืนค่ากลับไปเป็นค่ามาตรฐานเมื่อใช้เสร็จ
+	log.SetOutput(os.Stderr)
+	log.SetFlags(log.LstdFlags)
+	log.SetPrefix("")
+	log.Println("back to normal stderr output")
+}
+```
+
+ผลลัพธ์:
+
+```
+captured: [GLOBAL] log_setoutput_demo.go:17: this goes into buf, not stderr
+2026/09/26 03:12:53 back to normal stderr output
+```
+
+ฟังก์ชันกลุ่มนี้มีประโยชน์มากเวลาเขียน **unit test** ที่ต้องการตรวจสอบว่าโค้ดที่เรียก `log.Println` ภายในเขียนข้อความอะไรออกมาบ้าง (redirect ไปที่ `bytes.Buffer` แล้วตรวจสอบเนื้อหาที่ capture ได้) แทนที่จะปล่อยให้ log ไหลไปที่ stderr จริงระหว่างรัน test ตามที่จะเรียนเทคนิคการทดสอบเจาะลึกกว่านี้ในภาคที่ 7 (Testing ขั้นสูง)
+
 ---
 
 ## 5. ข้อจำกัดของ `log` แบบดั้งเดิม
