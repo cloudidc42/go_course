@@ -165,7 +165,7 @@
 
 ## สถานะความคืบหน้า
 
-- [x] Part 001–078 (ภาคที่ 1–6 ครบทั้งหมด: พื้นฐาน, ระดับกลาง, Concurrency, Standard Library, Web Development, Database)
-- [ ] Part 079–110 (กำลังทยอยเขียน)
+- [x] Part 001–099 (ภาคที่ 1–9 ครบทั้งหมด: พื้นฐาน, ระดับกลาง, Concurrency, Standard Library, Web Development, Database, Testing/Tooling/Performance, Microservices, DevOps)
+- [ ] Part 100–110 (ภาคที่ 10: มืออาชีพและระดับโลก — กำลังทยอยเขียน)
 
 ดูไฟล์แต่ละ part ได้ที่โฟลเดอร์ [`parts/`](./parts) ชื่อไฟล์รูปแบบ `NNN-slug.md`
