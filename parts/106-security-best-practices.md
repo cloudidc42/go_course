@@ -10,15 +10,16 @@
 2. Injection: ทบทวน SQL Injection และหลักการป้องกันด้วย Parameterized Query (Part 071)
 3. Broken Authentication: bcrypt, JWT ให้ถูกวิธี (ทบทวน Part 051, 067)
 4. Cross-Site Scripting (XSS): พึ่งพา Auto-Escaping ของ `html/template` (ทบทวน Part 065)
-5. Insecure Deserialization: ข้อควรระวังเมื่อ decode JSON/Gob จากแหล่งที่ไม่น่าเชื่อถือ
-6. Vulnerable Dependencies: สแกนด้วย `govulncheck` (รันจริง พร้อมผลลัพธ์จริง)
-7. Secrets Management: ห้าม hardcode credential เด็ดขาด
-8. Security Misconfiguration: ค่า default ที่ปลอดภัย
-9. Input Validation คือแนวป้องกันชั้นที่สอง (Defense in Depth)
-10. Checklist: Secure Defaults สำหรับ Go Web Service ใหม่
-11. Checklist: Security Code Review สำหรับทีม
-12. สรุปสิ่งที่ได้เรียนในบทนี้
-13. แบบฝึกหัดท้ายบท
+5. Broken Access Control: Authorization ไม่ใช่แค่ Authentication และการป้องกัน CSRF
+6. Insecure Deserialization: ข้อควรระวังเมื่อ decode JSON/Gob จากแหล่งที่ไม่น่าเชื่อถือ
+7. Vulnerable Dependencies: สแกนด้วย `govulncheck` (รันจริง พร้อมผลลัพธ์จริง)
+8. Secrets Management: ห้าม hardcode credential เด็ดขาด
+9. Security Misconfiguration: ค่า default ที่ปลอดภัย (รวม TLS Hardening)
+10. Input Validation คือแนวป้องกันชั้นที่สอง (Defense in Depth)
+11. Checklist: Secure Defaults สำหรับ Go Web Service ใหม่
+12. Checklist: Security Code Review สำหรับทีม
+13. สรุปสิ่งที่ได้เรียนในบทนี้
+14. แบบฝึกหัดท้ายบท
 
 ---
 
@@ -35,10 +36,10 @@
 | Sensitive Data Exposure | ข้อมูลอ่อนไหวรั่วไหลระหว่างทางหรือตอนเก็บ | TLS (**Part 051**), AES-GCM, ไม่ log ข้อมูลอ่อนไหว |
 | XML External Entities (XXE) | Parser ยอมให้ XML อ้างอิงไฟล์ระบบ/URL ภายนอก | ปิด external entity resolution เมื่อ parse XML ที่ไม่น่าเชื่อถือ (**Part 026**) |
 | Broken Access Control | ผู้ใช้เข้าถึงข้อมูล/ฟังก์ชันที่ไม่ควรเข้าถึงได้ | ตรวจสิทธิ์ทุก endpoint ด้วย middleware (**Part 057, 067**) ไม่พึ่งพา "security by obscurity" |
-| Security Misconfiguration | ค่า default ที่ไม่ปลอดภัยหลงเหลือใน production | Checklist หัวข้อ 10 ของบทนี้ |
+| Security Misconfiguration | ค่า default ที่ไม่ปลอดภัยหลงเหลือใน production | Checklist หัวข้อ 11 ของบทนี้ |
 | Cross-Site Scripting (XSS) | Inject โค้ดฝั่ง client ผ่านข้อมูลที่ไม่ถูก escape | Auto-escaping ของ `html/template` (**Part 065**) |
-| Insecure Deserialization | Decode ข้อมูลจากแหล่งไม่น่าเชื่อถือแล้วเกิดผลข้างเคียงที่อันตราย | ทบทวนในหัวข้อ 5 ของบทนี้ |
-| Using Components with Known Vulnerabilities | Dependency ที่ใช้มีช่องโหว่ที่รู้จักแล้ว | `govulncheck` (หัวข้อ 6 ของบทนี้) |
+| Insecure Deserialization | Decode ข้อมูลจากแหล่งไม่น่าเชื่อถือแล้วเกิดผลข้างเคียงที่อันตราย | ทบทวนในหัวข้อ 6 ของบทนี้ |
+| Using Components with Known Vulnerabilities | Dependency ที่ใช้มีช่องโหว่ที่รู้จักแล้ว | `govulncheck` (หัวข้อ 7 ของบทนี้) |
 | Insufficient Logging & Monitoring | ตรวจไม่พบการโจมตีเพราะไม่มี log/alert ที่เพียงพอ | `slog` และ observability (**Part 054, 099**) |
 
 สังเกตว่า**ครึ่งหนึ่งของตารางนี้เราได้เรียนวิธีป้องกันไปแล้วในบทก่อนหน้า** — นี่คือเหตุผลที่บทนี้เน้นการ**เชื่อมโยง** มากกว่าสอนใหม่ทั้งหมด ส่วนที่เหลือ (deserialization, dependency scanning, secrets management, misconfiguration) คือเนื้อหาใหม่ที่จะเติมให้ครบ
@@ -83,9 +84,9 @@ row := db.QueryRow(query)
 - **JWT ไม่ได้ถูกเข้ารหัส** (encrypted) เพียงแค่ **เซ็นลายเซ็น** (signed) — ใครก็ตาม decode payload อ่านได้เสมอ (แค่ base64 decode) **ห้ามใส่ข้อมูลอ่อนไหว** เช่น รหัสผ่าน, เลขบัตรเครดิต ลงใน claims เด็ดขาด
 - **ต้องตรวจสอบ signing algorithm ที่ระบุมาใน token ตรงกับที่ server คาดหวังเสมอ** ไม่ควรอนุญาตให้ token กำหนด algorithm เองอย่างอิสระ (library อย่าง `golang-jwt/jwt/v5` ที่ใช้ใน Part 067 มี API ที่บังคับให้ระบุ algorithm ที่ยอมรับตอน parse อยู่แล้ว ให้ใช้ตามที่ library แนะนำเสมอ)
 - **ตั้งเวลาหมดอายุ (`exp`) สั้นสมเหตุสมผลเสมอ** และใช้ **refresh token pattern** (ตามที่สาธิตใน Part 067) แทนที่จะออก access token ที่มีอายุยาวนาน เพื่อจำกัดความเสียหายหาก token รั่วไหล
-- **เก็บ secret key ที่ใช้เซ็น JWT (HMAC secret) หรือ private key (RSA/ECDSA) อย่างปลอดภัย** — ประเด็นนี้เชื่อมโยงตรงกับหัวข้อ 7 (Secrets Management) ของบทนี้
+- **เก็บ secret key ที่ใช้เซ็น JWT (HMAC secret) หรือ private key (RSA/ECDSA) อย่างปลอดภัย** — ประเด็นนี้เชื่อมโยงตรงกับหัวข้อ 8 (Secrets Management) ของบทนี้
 
-**Part 068** เพิ่มมุมมองเรื่อง cookie-based session และ OAuth2 ไว้แล้ว โดยเฉพาะ flag ของ cookie ที่ต้องตั้งให้ถูกต้อง (`Secure`, `HttpOnly`, `SameSite`) ซึ่งจะย้ำอีกครั้งใน checklist หัวข้อ 10
+**Part 068** เพิ่มมุมมองเรื่อง cookie-based session และ OAuth2 ไว้แล้ว โดยเฉพาะ flag ของ cookie ที่ต้องตั้งให้ถูกต้อง (`Secure`, `HttpOnly`, `SameSite`) ซึ่งจะย้ำอีกครั้งใน checklist หัวข้อ 11
 
 ---
 
@@ -101,7 +102,69 @@ row := db.QueryRow(query)
 
 ---
 
-## 5. Insecure Deserialization: ข้อควรระวังเมื่อ Decode ข้อมูลจากแหล่งที่ไม่น่าเชื่อถือ
+## 5. Broken Access Control: Authorization ไม่ใช่แค่ Authentication และการป้องกัน CSRF
+
+**Authentication** (รู้ว่าใครเรียกมา) กับ **Authorization** (ผู้เรียกมีสิทธิ์ทำสิ่งนี้จริงหรือไม่) เป็นคนละเรื่องกัน แต่มือใหม่จำนวนมากทำแค่ authentication แล้วคิดว่าปลอดภัยแล้ว — **Part 067** สอน JWT authentication ไว้อย่างละเอียด แต่ authentication บอกแค่ว่า "นี่คือ user X" ไม่ได้บอกว่า "user X มีสิทธิ์ลบ order ของ user Y ได้หรือไม่"
+
+### 5.1 ตรวจสอบสิทธิ์ทุก endpoint อย่างชัดเจน
+
+```go
+// authMiddleware (จาก Part 067) แค่ยืนยันตัวตนและใส่ user ลง context
+// authorizeOwner คือชั้นที่สองที่ตรวจสอบว่า "user นี้เป็นเจ้าของ resource นี้จริงหรือไม่"
+func authorizeOwner(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		claims, ok := r.Context().Value(userClaimsKey).(*Claims)
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		orderID := r.PathValue("id")
+		order, err := orderStore.Get(r.Context(), orderID)
+		if err != nil {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+
+		// จุดสำคัญ: ตรวจสอบความเป็นเจ้าของอย่างชัดเจน ไม่ใช่แค่ตรวจว่า login แล้ว
+		if order.OwnerID != claims.UserID {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+```
+
+บั๊กคลาสสิกที่เรียกว่า **Insecure Direct Object Reference (IDOR)** เกิดขึ้นเมื่อ endpoint เช็คแค่ "login แล้วหรือยัง" แต่ลืมเช็คว่า resource ที่ขอ (เช่น `/orders/{id}`) เป็นของผู้เรียกจริงหรือไม่ — ผู้ใช้ที่ login ปกติสามารถเปลี่ยนเลข `{id}` ใน URL แล้วเห็นข้อมูลของคนอื่นได้ทันทีถ้าไม่มีการตรวจสอบชั้นนี้
+
+### 5.2 หลักการ Least Privilege
+
+ออกแบบระบบสิทธิ์ให้ผู้ใช้/service แต่ละตัวมีสิทธิ์**เท่าที่จำเป็นต้องใช้จริงเท่านั้น** ไม่ใช่ "ให้สิทธิ์กว้างไว้ก่อนเผื่อใช้ในอนาคต" — ตัวอย่างเช่น credential ของ database ที่ service ใช้ควรมีสิทธิ์แค่ตารางที่ service นั้นต้องใช้จริง ไม่ใช่สิทธิ์ระดับ superuser ของทั้งฐานข้อมูล แม้จะสะดวกกว่าตอนพัฒนาก็ตาม
+
+### 5.3 CSRF (Cross-Site Request Forgery) และ `SameSite` Cookie
+
+**Part 068** แนะนำ flag `SameSite` ของ cookie ไว้แล้วเป็นส่วนหนึ่งของ session security หัวข้อนี้อธิบายว่าทำไมมันถึงสำคัญกับ CSRF โดยเฉพาะ: CSRF คือการที่เว็บไซต์อื่นหลอกให้เบราว์เซอร์ของผู้ใช้ส่ง request ไปยังระบบของเราโดยที่ผู้ใช้ไม่ได้ตั้งใจ (เช่น ฝัง form ที่ submit อัตโนมัติ) โดยอาศัยว่าเบราว์เซอร์แนบ cookie session ของผู้ใช้ไปกับ request นั้นให้อัตโนมัติ
+
+```go
+http.SetCookie(w, &http.Cookie{
+	Name:     "session_id",
+	Value:    sessionID,
+	HttpOnly: true,
+	Secure:   true,
+	SameSite: http.SameSiteStrictMode, // ป้องกัน cookie ไม่ให้แนบไปกับ request ข้าม origin
+	Path:     "/",
+})
+```
+
+`SameSite=Strict` หรือ `Lax` บอกเบราว์เซอร์ว่า**อย่าแนบ cookie นี้ไปกับ request ที่มาจาก origin อื่น** ทำให้การโจมตี CSRF แบบพื้นฐานใช้ไม่ได้ผลตั้งแต่ระดับเบราว์เซอร์ อย่างไรก็ตาม สำหรับระบบที่ต้องรองรับ cross-site request ที่ถูกต้องตามกฎหมาย (เช่น embed เป็น iframe ในเว็บอื่น) หรือต้องการการป้องกันชั้นที่สอง ควรเพิ่ม **CSRF token** แบบดั้งเดิม: สร้าง token สุ่ม (ด้วย `crypto/rand` ตาม **Part 051**) ฝังไว้ใน form/header แล้วตรวจสอบว่าตรงกับค่าที่เก็บไว้ฝั่ง server ก่อนประมวลผลทุกครั้งที่มีการเปลี่ยนแปลงข้อมูล (POST/PUT/DELETE)
+
+> **ข้อสังเกต**: CSRF เกี่ยวข้องกับระบบที่ใช้ **cookie-based session** เป็นหลัก ระบบที่ใช้ **JWT ผ่าน `Authorization` header** (ตาม **Part 067**) ไม่เสี่ยงต่อ CSRF แบบเดียวกัน เพราะเบราว์เซอร์ไม่แนบ custom header ให้อัตโนมัติข้าม origin แบบที่แนบ cookie ให้ — นี่คือข้อดีเชิง security อย่างหนึ่งของ token-based auth เหนือ session-based auth ที่ **Part 068** กล่าวถึงไว้ในหัวข้อ "จะเลือก Session หรือ JWT ดี"
+
+---
+
+## 6. Insecure Deserialization: ข้อควรระวังเมื่อ Decode ข้อมูลจากแหล่งที่ไม่น่าเชื่อถือ
 
 **Deserialization** คือกระบวนการแปลงข้อมูลดิบ (bytes/text) กลับเป็น struct/object ในโปรแกรม — เช่น `json.Unmarshal`, `gob.Decode`, `xml.Unmarshal` ความเสี่ยงเกิดขึ้นเมื่อข้อมูลที่ decode มาจาก**แหล่งที่ไม่น่าเชื่อถือ** (เช่น request body จากผู้ใช้ภายนอก) เพราะ deserializer ที่ออกแบบไม่รัดกุมอาจถูกใช้เป็นช่องทางสร้างผลข้างเคียงที่ไม่ตั้งใจ
 
@@ -146,11 +209,11 @@ Decode ลง type ที่เจาะจงชัดเจน (`struct` ท�
 
 ### 5.4 Validate ค่าที่ decode ได้ก่อนใช้งานเสมอ
 
-Deserialization สำเร็จไม่ได้แปลว่าข้อมูล "ถูกต้องตามกฎธุรกิจ" แค่แปลว่า "รูปแบบ syntax ตรงกับ struct" — เช่น `Age int` decode ค่า `-5` ได้สำเร็จโดยไม่มี error แต่ไม่สมเหตุสมผลในทางธุรกิจ ต้องมีชั้น validation ต่อจาก deserialization เสมอ (รายละเอียดในหัวข้อ 9)
+Deserialization สำเร็จไม่ได้แปลว่าข้อมูล "ถูกต้องตามกฎธุรกิจ" แค่แปลว่า "รูปแบบ syntax ตรงกับ struct" — เช่น `Age int` decode ค่า `-5` ได้สำเร็จโดยไม่มี error แต่ไม่สมเหตุสมผลในทางธุรกิจ ต้องมีชั้น validation ต่อจาก deserialization เสมอ (รายละเอียดในหัวข้อ 10)
 
 ---
 
-## 6. Vulnerable Dependencies: สแกนด้วย `govulncheck`
+## 7. Vulnerable Dependencies: สแกนด้วย `govulncheck`
 
 หมวดหมู่ OWASP "Using Components with Known Vulnerabilities" คือความเสี่ยงที่นักพัฒนาควบคุมได้ยากที่สุดในบรรดาทั้งหมด เพราะช่องโหว่ไม่ได้อยู่ในโค้ดที่เราเขียนเอง แต่อยู่ใน **dependency** ที่เราติดตั้งมาใช้ — โครงการ Go ขนาดกลางอาจมี dependency (รวม transitive) หลายสิบถึงหลายร้อยตัว การไล่ตรวจ CVE ของแต่ละตัวด้วยมือเป็นไปไม่ได้ในทางปฏิบัติ
 
@@ -300,7 +363,7 @@ Exit code เปลี่ยนเป็น `0` — นี่คือ workflow 
 
 ---
 
-## 7. Secrets Management: ห้าม Hardcode Credential เด็ดขาด
+## 8. Secrets Management: ห้าม Hardcode Credential เด็ดขาด
 
 **Part 096** สอนการใช้ไฟล์ `.env` ร่วมกับ Docker Compose ไปแล้ว หลักการด้าน security ที่ต้องย้ำให้ชัดเจนในบทนี้คือ:
 
@@ -372,7 +435,7 @@ Secret Manager ระดับองค์กร (Vault, AWS/GCP Secrets Manager
 
 ---
 
-## 8. Security Misconfiguration: ค่า Default ที่ปลอดภัย
+## 9. Security Misconfiguration: ค่า Default ที่ปลอดภัย
 
 "Security Misconfiguration" เป็นหมวดหมู่ OWASP ที่กว้างที่สุดและพบบ่อยที่สุดในทางปฏิบัติ เพราะไม่ใช่ bug ในโค้ด แต่เป็น**การตั้งค่าที่หลงเหลือความหละหลวมจากตอนพัฒนาไปจนถึง production** ตัวอย่างที่พบบ่อยใน Go web service:
 
@@ -386,7 +449,7 @@ Secret Manager ระดับองค์กร (Vault, AWS/GCP Secrets Manager
 
 ---
 
-## 9. Input Validation คือแนวป้องกันชั้นที่สอง (Defense in Depth)
+## 10. Input Validation คือแนวป้องกันชั้นที่สอง (Defense in Depth)
 
 ตลอดบทนี้เราเน้นว่า**การป้องกัน injection/deserialization ที่แท้จริงมาจากกลไกที่ถูกต้อง** (parameterized query, auto-escaping) ไม่ใช่จากการ validate input แต่ input validation ยังมีบทบาทสำคัญในฐานะ **แนวป้องกันชั้นที่สอง (defense in depth)** — หลักการที่ว่าระบบควรมีการป้องกันซ้อนกันหลายชั้น เพื่อที่ถ้าชั้นหนึ่งพลาดไป ยังมีอีกชั้นคอยกันไว้
 
@@ -414,11 +477,11 @@ type CreateUserRequest struct {
 
 ### 9.4 อย่าลืม Validate ขนาดและ Rate ไม่ใช่แค่รูปแบบ
 
-Input validation ไม่ได้มีแค่มิติ "รูปแบบถูกต้องไหม" แต่รวมถึง "ขนาดสมเหตุสมผลไหม" (เชื่อมโยงกับ `http.MaxBytesReader` ในหัวข้อ 5) และ "ความถี่สมเหตุสมผลไหม" — ข้อหลังคือหน้าที่ของ **rate limiting** ซึ่งจะกลับมาในหัวข้อ 10 และ Part 107
+Input validation ไม่ได้มีแค่มิติ "รูปแบบถูกต้องไหม" แต่รวมถึง "ขนาดสมเหตุสมผลไหม" (เชื่อมโยงกับ `http.MaxBytesReader` ในหัวข้อ 6) และ "ความถี่สมเหตุสมผลไหม" — ข้อหลังคือหน้าที่ของ **rate limiting** ซึ่งจะกลับมาในหัวข้อ 11 และ Part 107
 
 ---
 
-## 10. Checklist: Secure Defaults สำหรับ Go Web Service ใหม่
+## 11. Checklist: Secure Defaults สำหรับ Go Web Service ใหม่
 
 เมื่อเริ่มโปรเจกต์ Go web service ใหม่ ใช้ checklist นี้เป็นค่าเริ่มต้นมาตรฐานก่อนขึ้น production:
 
@@ -436,7 +499,7 @@ Input validation ไม่ได้มีแค่มิติ "รูปแบ�
 
 ---
 
-## 11. Checklist: Security Code Review สำหรับทีม
+## 12. Checklist: Security Code Review สำหรับทีม
 
 นอกจาก checklist สำหรับตัวระบบแล้ว ทีมควรมี checklist สำหรับ**คนรีวิวโค้ด** ใช้ประกอบกับ pull request ทุกครั้งที่แตะเรื่อง input จากภายนอกหรือ authentication:
 
@@ -473,7 +536,7 @@ Checklist ทั้งสองชุดนี้ไม่ใช่เอกส�
 2. หยิบโปรเจกต์ Go ที่เคยเขียนไว้ในบทก่อนๆ ของหลักสูตรนี้ (เช่นจาก Part 060 หรือ Part 088) มารัน `govulncheck ./...` จริง ถ้าพบช่องโหว่ ให้อัปเกรด dependency ที่เกี่ยวข้องแล้วสแกนซ้ำจนสะอาด
 3. เขียน middleware สำหรับ Gin/Echo (ทบทวนจาก Part 057, 061, 063) ที่ implement rate limiting แบบง่ายด้วย token bucket จำกัดจำนวน request ต่อ IP ต่อนาที สำหรับ endpoint `/login`
 4. ทบทวนโค้ดระบบ signup/login ที่เขียนไว้ใน Part 051 แล้วเพิ่ม custom `String()` method ให้ struct `User`/`Config` ที่เกี่ยวข้อง เพื่อป้องกันไม่ให้ password hash หลุดออกไปใน log โดยไม่ตั้งใจ
-5. เขียน checklist security code review ของบทนี้ (หัวข้อ 11) ให้เป็นไฟล์ `SECURITY_CHECKLIST.md` แล้วลองใช้ตรวจ pull request จริงหนึ่งอันจากโปรเจกต์ของตัวเอง (หรือ pull request สาธารณะของ open source project) — บันทึกว่าเจอข้อไหนที่น่าสนใจบ้าง
+5. เขียน checklist security code review ของบทนี้ (หัวข้อ 12) ให้เป็นไฟล์ `SECURITY_CHECKLIST.md` แล้วลองใช้ตรวจ pull request จริงหนึ่งอันจากโปรเจกต์ของตัวเอง (หรือ pull request สาธารณะของ open source project) — บันทึกว่าเจอข้อไหนที่น่าสนใจบ้าง
 6. ค้นคว้าเพิ่มเติมเรื่อง `gitleaks` หรือ `trufflehog` (เครื่องมือสแกนหา secret ที่หลุดเข้า git history) ลองติดตั้งและรันกับ repository ของตัวเองเพื่อดูว่ามี credential ใดๆ หลุดเข้าไปโดยไม่ตั้งใจหรือไม่
 
 ---
