@@ -165,7 +165,6 @@
 
 ## สถานะความคืบหน้า
 
-- [x] Part 001–099 (ภาคที่ 1–9 ครบทั้งหมด: พื้นฐาน, ระดับกลาง, Concurrency, Standard Library, Web Development, Database, Testing/Tooling/Performance, Microservices, DevOps)
-- [ ] Part 100–110 (ภาคที่ 10: มืออาชีพและระดับโลก — กำลังทยอยเขียน)
+- [x] **หลักสูตรครบทั้ง 110 ตอนแล้ว!** (Part 001–110) ครอบคลุมตั้งแต่พื้นฐานภาษา Go ไปจนถึงระดับมืออาชีพและระดับโลก ครบทั้ง 10 ภาค รวมถึงโปรเจกต์เต็มรูปแบบ 3 โปรเจกต์ (E-Commerce API, Real-time Chat, URL Shortener)
 
-ดูไฟล์แต่ละ part ได้ที่โฟลเดอร์ [`parts/`](./parts) ชื่อไฟล์รูปแบบ `NNN-slug.md`
+ดูไฟล์แต่ละ part ได้ที่โฟลเดอร์ [`parts/`](./parts) ชื่อไฟล์รูปแบบ `NNN-slug.md` — เริ่มต้นที่ [Part 001](./parts/001-intro-and-setup.md) และจบที่ [Part 110](./parts/110-career-path-world-class.md)
