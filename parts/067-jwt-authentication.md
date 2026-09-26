@@ -1,6 +1,6 @@
 # Part 067: Authentication ด้วย JWT
 
-> ภาคที่ 5: Web Development — ตอนที่ 12 จาก 15
+> ภาคที่ 5: Web Development — ตอนที่ 12 จาก 15 (Part 56–70)
 
 ## สารบัญของบทนี้
 

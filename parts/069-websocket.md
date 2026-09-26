@@ -1,6 +1,6 @@
 # Part 069: WebSocket ด้วย Go
 
-> ภาคที่ 5: Web Development — ตอนที่ 14 จาก 15
+> ภาคที่ 5: Web Development — ตอนที่ 14 จาก 15 (Part 56–70)
 
 ## สารบัญของบทนี้
 
@@ -14,8 +14,10 @@
 8. ทางแก้ที่ 1: ห่อ Connection ด้วย Mutex
 9. ทางแก้ที่ 2: Single Writer Goroutine + Channel (รูปแบบมาตรฐานสำหรับ Chat/Broadcast)
 10. Graceful Close
-11. สรุปสิ่งที่ได้เรียนในบทนี้
-12. แบบฝึกหัดท้ายบท
+11. Message Type: Text vs Binary
+12. การ Scale WebSocket ข้ามหลาย Server Instance
+13. สรุปสิ่งที่ได้เรียนในบทนี้
+14. แบบฝึกหัดท้ายบท
 
 ---
 
@@ -428,6 +430,53 @@ c.conn.Close()
 
 ---
 
+## 11. Message Type: Text vs Binary
+
+ทุกครั้งที่เรียก `WriteMessage`/`ReadMessage` สังเกตว่ามี parameter/return value ตัวแรกเป็น **message type** เสมอ ซึ่งมีค่าเป็นไปได้สองแบบหลัก:
+
+```go
+websocket.TextMessage   // ข้อมูลเป็น UTF-8 text (เช่น JSON string) — ใช้บ่อยที่สุด
+websocket.BinaryMessage // ข้อมูลเป็น binary ดิบๆ (เช่น protobuf, รูปภาพ, ไฟล์)
+```
+
+ตัวอย่างในบทนี้ทั้งหมดส่งกลับ `msgType` เดิมที่ได้รับมา (ในกรณี echo) หรือกำหนดเป็น `websocket.TextMessage` ตรงๆ (ในกรณี hub) เพราะข้อความแชทเป็น text เสมอ แต่ถ้าต้องส่งข้อมูลที่มีโครงสร้างซับซ้อน แนวทางที่นิยมคือส่งเป็น `TextMessage` ที่มีเนื้อหาเป็น JSON string แล้วให้ทั้งสองฝั่ง encode/decode JSON เอง:
+
+```go
+type wsEvent struct {
+	Type string `json:"type"` // เช่น "chat_message", "user_joined", "typing"
+	Data string `json:"data"`
+}
+
+payload, _ := json.Marshal(wsEvent{Type: "chat_message", Data: "สวัสดีครับ"})
+conn.WriteMessage(websocket.TextMessage, payload)
+```
+
+รูปแบบ "ห่อด้วย `type` field" แบบนี้ทำให้ WebSocket connection เดียวส่งได้หลายชนิด event ปนกัน โดยฝั่งรับ `switch` ตาม `Type` เพื่อตัดสินใจว่าจะจัดการอย่างไร — เป็นรูปแบบที่จะใช้จริงเต็มรูปแบบใน **Part 104: Real-time Chat Application** (เช่นแยกแยะระหว่าง event "มีข้อความใหม่" กับ "มีคนกำลังพิมพ์อยู่")
+
+`websocket.PingMessage`, `websocket.PongMessage`, และ `websocket.CloseMessage` ที่เห็นไปแล้วในหัวข้อก่อนหน้า เป็น **control frame** พิเศษที่ library จัดการ logic ส่วนใหญ่ให้อัตโนมัติ ต่างจาก `TextMessage`/`BinaryMessage` ที่เป็น **data frame** ซึ่งเราต้องเขียน logic จัดการเนื้อหาเอง
+
+---
+
+## 12. การ Scale WebSocket ข้ามหลาย Server Instance
+
+ตัวอย่าง hub ในหัวข้อที่ 9 เก็บรายชื่อ client ทั้งหมดไว้ใน map ในหน่วยความจำของ process เดียว ทำงานได้ดีตราบใดที่มีเซิร์ฟเวอร์แค่ตัวเดียว แต่เมื่อระบบต้อง scale แนวนอน (รันหลาย instance พร้อมกันหลัง load balancer เหมือนที่พูดถึงใน **Part 068** สำหรับ session) จะเจอปัญหาใหม่ทันที: **client A ที่เชื่อมต่ออยู่กับ instance ที่ 1 จะไม่มีทางได้รับ broadcast ที่มาจาก client B ที่เชื่อมต่ออยู่กับ instance ที่ 2 เลย** เพราะ hub ของแต่ละ instance รู้จักแค่ client ของตัวเองเท่านั้น
+
+ทางแก้มาตรฐานที่ใช้กันในระบบจริงคือเพิ่ม **message broker กลาง** ที่ทุก instance เชื่อมต่อร่วมกัน เพื่อกระจายข้อความข้าม instance:
+
+```
+Client A ──ws──> Instance 1 ──publish──┐
+                                        ├──> Redis Pub/Sub (channel: "chat")
+Client B ──ws──> Instance 2 <─subscribe┘
+```
+
+แนวคิดคร่าวๆ (จะเรียนเจาะลึกการต่อ Redis จริงใน **Part 077**): แทนที่ `hub.broadcast()` จะวนลูปส่งเข้า `c.send` ของ client ในเครื่องตัวเองเท่านั้น ให้เพิ่มขั้นตอน **publish ข้อความไปที่ Redis channel กลางด้วย** และให้ทุก instance **subscribe** channel เดียวกันไว้ตลอดเวลา เมื่อ instance ไหนได้รับข้อความจาก Redis (ไม่ว่าจะ publish มาจาก instance ตัวเองหรือ instance อื่น) ก็ค่อยส่งต่อเข้า `c.send` ของ client ทุกตัวที่ต่ออยู่กับ **instance นั้นๆ เท่านั้น** วิธีนี้ทำให้ข้อความกระจายไปถึงทุก client บนทุก instance ได้ โดยที่แต่ละ instance ไม่ต้องรู้จักกันโดยตรงเลย (รู้จักแค่ Redis ตัวกลาง)
+
+รูปแบบนี้เรียกกว้างๆ ว่า **pub/sub (publish/subscribe)** เป็นรูปแบบสถาปัตยกรรมที่จะเจอซ้ำอีกหลายครั้งในภาคหลังของหลักสูตร ทั้ง Redis (Part 077) และ message queue อย่าง RabbitMQ/Kafka (Part 091-092) ล้วนใช้แนวคิดนี้เป็นแกนกลาง
+
+> **ข้อคิดสำคัญ**: อย่าเริ่มออกแบบระบบด้วยความซับซ้อนแบบ multi-instance ตั้งแต่วันแรกถ้ายังไม่จำเป็น — hub แบบในหน่วยความจำเดียว (หัวข้อที่ 9) รองรับผู้ใช้พร้อมกันได้เป็นหลักพันคนสบายๆ ด้วยเครื่องเดียว ค่อยเพิ่มชั้น pub/sub เมื่อวัดผลจริงแล้วว่าเซิร์ฟเวอร์ตัวเดียวไม่พอ
+
+---
+
 ## สรุปสิ่งที่ได้เรียนในบทนี้
 
 - WebSocket แก้ปัญหาที่ HTTP request/response ธรรมดาทำไม่ได้: การสื่อสารสองทางแบบ real-time บน connection เดียวที่คงอยู่ตลอด
@@ -438,6 +487,8 @@ c.conn.Close()
 - **`*websocket.Conn` ไม่ปลอดภัยสำหรับการเขียนพร้อมกันจากหลาย goroutine** — ต้อง serialize การเขียนเสมอ
 - สองวิธีมาตรฐานในการ serialize การเขียน: **mutex ห่อ connection** (ง่าย เหมาะกับ connection เดี่ยว) หรือ **single writer goroutine + channel** (scale ดีกว่า เหมาะกับ broadcast/chat) — ทั้งสองผ่านการทดสอบด้วย `go test -race` แล้วว่าไม่มี data race
 - Close handshake ของ WebSocket จัดการเกือบทั้งหมดโดย `gorilla/websocket` อัตโนมัติผ่าน default close handler
+- Message type แบ่งเป็น data frame (`TextMessage`/`BinaryMessage` ที่เราจัดการเนื้อหาเอง มักห่อด้วย JSON ที่มี `type` field) และ control frame (`Ping`/`Pong`/`Close` ที่ library จัดการให้เกือบหมด)
+- การ scale WebSocket ข้ามหลาย server instance ต้องอาศัย message broker กลางแบบ pub/sub (เช่น Redis) เพื่อกระจายข้อความข้าม instance ที่ไม่รู้จักกันโดยตรง
 
 ## แบบฝึกหัดท้ายบท
 
@@ -446,7 +497,8 @@ c.conn.Close()
 3. ขยาย hub ในหัวข้อที่ 9 ให้รองรับ "ห้องแชท" หลายห้อง โดยแต่ละ client อยู่ในห้องเดียว และ broadcast จะส่งเฉพาะคนในห้องเดียวกันเท่านั้น
 4. เพิ่ม endpoint `/ws/stats` ที่ตอบ (ผ่าน HTTP ธรรมดา ไม่ใช่ WebSocket) จำนวน client ที่เชื่อมต่ออยู่ในปัจจุบันของ hub
 5. ทดลองปิด client กลางคันโดยไม่ส่ง close frame ที่ถูกต้อง (เช่น kill process กลางทาง) แล้วสังเกตว่า `pongWait` timeout ทำงานอย่างไรฝั่งเซิร์ฟเวอร์ในการตรวจจับว่า connection ตายแล้ว
-6. ลองเปลี่ยนไปใช้ `nhooyr.io/websocket` เขียน echo server แบบเดียวกับหัวข้อที่ 6 ใหม่ เปรียบเทียบ API และความยากง่ายกับ `gorilla/websocket`
+6. แก้ hub ในหัวข้อที่ 9 ให้ข้อความที่ส่งเป็น JSON ตามรูปแบบ `wsEvent` ในหัวข้อที่ 11 (มี `type` และ `data`) แทนที่จะเป็น text ดิบๆ แล้วเพิ่ม event type ใหม่ `"user_joined"` ที่ broadcast อัตโนมัติเมื่อมี client เชื่อมต่อเข้ามาใหม่
+7. ลองเปลี่ยนไปใช้ `nhooyr.io/websocket` เขียน echo server แบบเดียวกับหัวข้อที่ 6 ใหม่ เปรียบเทียบ API และความยากง่ายกับ `gorilla/websocket`
 
 ---
 

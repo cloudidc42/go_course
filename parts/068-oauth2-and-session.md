@@ -1,6 +1,6 @@
 # Part 068: Authentication ด้วย OAuth2 และ Session
 
-> ภาคที่ 5: Web Development — ตอนที่ 13 จาก 15
+> ภาคที่ 5: Web Development — ตอนที่ 13 จาก 15 (Part 56–70)
 
 ## สารบัญของบทนี้
 
@@ -12,9 +12,11 @@
 6. Token-based Auth (JWT) เทียบกับ Session แบบดั้งเดิม
 7. Cookie-based Session ด้วย `net/http`
 8. In-Memory Session Store
-9. จะเลือก Session หรือ JWT ดี
-10. สรุปสิ่งที่ได้เรียนในบทนี้
-11. แบบฝึกหัดท้ายบท
+9. เชื่อม OAuth2 เข้ากับ Session: flow ที่สมบูรณ์
+10. PKCE: การป้องกันเพิ่มเติมสำหรับ Public Client
+11. จะเลือก Session หรือ JWT ดี
+12. สรุปสิ่งที่ได้เรียนในบทนี้
+13. แบบฝึกหัดท้ายบท
 
 ---
 
@@ -446,7 +448,79 @@ func (s *MemoryStore) Delete(id string) {
 
 ---
 
-## 9. จะเลือก Session หรือ JWT ดี
+## 9. เชื่อม OAuth2 เข้ากับ Session: flow ที่สมบูรณ์
+
+ตอนนี้เรามีทั้งสองชิ้นส่วนแล้ว: OAuth2 login flow (หัวข้อที่ 4) ที่จบด้วยการรู้ email/ชื่อของผู้ใช้จริงจาก Google และ session store (หัวข้อที่ 7-8) ที่จำผู้ใช้ได้ผ่าน cookie มาต่อกันให้ครบวงจร: หลังจากขั้นตอนที่ 7 ของ OAuth2 (ได้ `googleUserInfo` มาแล้ว) แทนที่จะแค่พิมพ์ข้อความตอบกลับเฉยๆ เราควรสร้าง session ให้ผู้ใช้คนนั้นทันที เหมือนกับที่ทำหลัง login ด้วยฟอร์มธรรมดา:
+
+```go
+func handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
+	// ... ตรวจสอบ state, แลก code เป็น token, ดึง userinfo เหมือนหัวข้อที่ 4 ...
+
+	// map บัญชี Google (info.Email) เข้ากับผู้ใช้ในระบบของเราเอง
+	// ถ้ายังไม่เคยมีในระบบ ให้สร้างบัญชีใหม่ให้อัตโนมัติ (เรียกว่า "just-in-time provisioning")
+	localUsername := findOrCreateUserByEmail(info.Email, info.Name)
+
+	sessionID, err := store.Create(localUsername, sessionTTL)
+	if err != nil {
+		http.Error(w, "สร้าง session ไม่สำเร็จ", http.StatusInternalServerError)
+		return
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookieName,
+		Value:    sessionID,
+		Path:     "/",
+		Expires:  time.Now().Add(sessionTTL),
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
+	})
+
+	http.Redirect(w, r, "/dashboard", http.StatusTemporaryRedirect)
+}
+```
+
+จุดสำคัญคือ **`findOrCreateUserByEmail`** — ระบบต้องตัดสินใจว่าจะ "จับคู่" บัญชี Google เข้ากับผู้ใช้ในระบบของตัวเองอย่างไร แนวทางทั่วไปคือใช้ email เป็น key เชื่อมโยง (ถ้า email ตรงกับบัญชีที่เคยสมัครด้วยฟอร์มปกติมาก่อน ก็ถือเป็นคนเดียวกัน) และถ้าไม่เคยมีบัญชีมาก่อนเลยก็สร้างบัญชีใหม่ให้อัตโนมัติทันที (แนวคิดนี้เรียกว่า **just-in-time provisioning** — ผู้ใช้ไม่ต้อง "สมัครสมาชิก" แยกต่างหากก่อนเลย กด "Login with Google" ครั้งแรกก็มีบัญชีในระบบทันที)
+
+หลังจากขั้นตอนนี้ **ตัวตนของผู้ใช้ในระบบของเราไม่ได้ผูกกับ OAuth2 อีกต่อไปแล้ว** — request ถัดๆ ไปทั้งหมดตรวจสอบผ่าน session cookie ธรรมดา (หรือจะออกเป็น JWT แทนก็ได้ตาม Part 067) ไม่ต้องติดต่อ Google อีกเลยจนกว่า session จะหมดอายุ
+
+---
+
+## 10. PKCE: การป้องกันเพิ่มเติมสำหรับ Public Client
+
+Flow ในหัวข้อที่ 2 ใช้ได้ดีเมื่อ **client เก็บ `ClientSecret` ไว้อย่างปลอดภัยบนเซิร์ฟเวอร์** (เรียกว่า **confidential client**) แต่ถ้า client เป็น **mobile app หรือ Single Page Application (SPA)** ที่ code ทั้งหมดอยู่บนเครื่องผู้ใช้หรือดาวน์โหลดไปรันในเบราว์เซอร์ (เรียกว่า **public client**) จะไม่มีทางเก็บ `ClientSecret` ให้ปลอดภัยได้เลย — ใครก็ถอด compile หรือเปิด dev tools ดู source แล้วขุดหา secret เจอได้
+
+**PKCE (Proof Key for Code Exchange, อ่านว่า "pixy")** คือส่วนขยายของ OAuth2 ที่แก้ปัญหานี้โดยไม่ต้องใช้ `ClientSecret` เลย หลักการคร่าวๆ:
+
+```
+1. Client สุ่มค่าลับ "code_verifier" ขึ้นมาเก็บไว้เอง (ไม่ส่งให้ใคร)
+2. Client คำนวณ "code_challenge" = SHA256(code_verifier) แล้วส่งไปกับ AuthCodeURL
+3. Authorization Server เก็บ code_challenge ไว้คู่กับ code ที่จะออกให้
+4. ตอนแลก code เป็น token (ขั้นตอน Exchange) client ต้องส่ง code_verifier ตัวจริงแนบไปด้วย
+5. Authorization Server คำนวณ SHA256(code_verifier) ที่ได้รับ เทียบกับ code_challenge ที่เก็บไว้
+   ถ้าไม่ตรงกัน ปฏิเสธทันที
+```
+
+ประโยชน์คือ แม้ authorization code จะถูกดักจับระหว่างทาง (เช่นจาก mobile app ที่ redirect URI อาจถูกแอปอื่นในเครื่องเดียวกันดักได้) ผู้ดักจับก็เอา code ไปแลก token ต่อไม่ได้ เพราะไม่มี `code_verifier` ตัวจริงที่ไม่เคยถูกส่งผ่าน network เลย
+
+`golang.org/x/oauth2` รองรับ PKCE ผ่าน `oauth2.S256ChallengeOption`:
+
+```go
+import "golang.org/x/oauth2"
+
+verifier := oauth2.GenerateVerifier() // สุ่ม code_verifier ให้อัตโนมัติ
+
+url := cfg.AuthCodeURL(state, oauth2.S256ChallengeOption(verifier))
+// ... เก็บ verifier ไว้ (เช่นใน session ชั่วคราวฝั่งเดียวกับที่เก็บ state) ...
+
+token, err := cfg.Exchange(ctx, code, oauth2.VerifierOption(verifier))
+```
+
+> **ข้อควรรู้**: ปัจจุบันแนวปฏิบัติที่ดี (best practice) ที่หลายผู้ให้บริการแนะนำคือใช้ PKCE **แม้กับ confidential client ก็ตาม** เพราะเป็นการป้องกันเพิ่มอีกชั้นโดยแทบไม่มีต้นทุนเพิ่มเลย ไม่ใช่ทางเลือกที่ใช้แทนกันได้กับ `ClientSecret` แต่เป็นการป้องกันเสริมที่ใช้ร่วมกันได้
+
+---
+
+## 11. จะเลือก Session หรือ JWT ดี
 
 ไม่มีคำตอบที่ถูกต้องตายตัว ขึ้นกับสถาปัตยกรรมของระบบ:
 
@@ -473,6 +547,8 @@ func (s *MemoryStore) Delete(id string) {
 - Session-based auth เก็บ state ไว้ที่เซิร์ฟเวอร์ (stateful) ต่างจาก JWT ที่เป็น stateless — แลกกับความสามารถเพิกถอนได้ทันที
 - Cookie-based session ใช้ `http.SetCookie`/`r.Cookie()` พร้อม flag ความปลอดภัยสำคัญ: `HttpOnly` (กัน XSS อ่าน cookie), `Secure` (บังคับ HTTPS), `SameSite` (ลดความเสี่ยง CSRF)
 - Session ID ต้องสุ่มด้วย `crypto/rand` เสมอ ไม่ใช่ `math/rand`
+- หลังจากได้ข้อมูลผู้ใช้จาก OAuth2 แล้ว ควร map เข้ากับบัญชีในระบบของเราเองด้วย email (just-in-time provisioning) แล้วสร้าง session/JWT ของแอปเราเองต่อทันที ไม่ต้องพึ่ง Google อีกต่อไปจนกว่าจะหมดอายุ
+- **PKCE** ป้องกันการดักจับ authorization code สำหรับ public client (mobile app, SPA) ที่เก็บ `ClientSecret` ให้ปลอดภัยไม่ได้ และปัจจุบันแนะนำให้ใช้แม้กับ confidential client เพื่อความปลอดภัยเพิ่มอีกชั้น
 - เลือก session เมื่อเป็นเว็บแอป server-rendered ที่ต้องการเพิกถอนสิทธิ์ได้ทันที เลือก JWT เมื่อเป็น API/microservices ที่ต้องการ stateless และ scale ง่าย
 
 ## แบบฝึกหัดท้ายบท
@@ -482,7 +558,9 @@ func (s *MemoryStore) Delete(id string) {
 3. เขียน unit test สำหรับฟังก์ชัน `randomState()` และ logic ตรวจสอบ `state` ใน `handleGoogleCallback` (ส่วนที่ทดสอบได้โดยไม่ต้องพึ่ง Google จริง)
 4. แก้ `MemoryStore` ให้มีฟังก์ชัน cleanup ที่ลบ session ที่หมดอายุแล้วออกเป็นระยะ (ใช้ `time.Ticker` รันเป็น goroutine พื้นหลัง ตามแนวคิดจาก Part 036-037)
 5. ทดลองเอา flag `HttpOnly` ออกจาก cookie แล้วเขียนโค้ด JavaScript ตัวอย่าง (สมมติสถานการณ์) ที่แสดงให้เห็นว่า `document.cookie` จะอ่าน session ID ได้ทันทีถ้าไม่ได้ตั้ง flag นี้ไว้
-6. ออกแบบและอธิบายเป็นข้อความ (ไม่ต้องเขียนโค้ด) ว่าถ้าต้องทำระบบที่มีทั้งเว็บแอปสำหรับผู้ใช้ทั่วไปและ public API สำหรับนักพัฒนาภายนอก ท่านจะออกแบบให้ใช้ session, JWT หรือทั้งสองอย่างผสมกันอย่างไร เพราะเหตุใด
+6. เขียนฟังก์ชัน `findOrCreateUserByEmail` แบบง่ายๆ (ใช้ map ในหน่วยความจำแทนฐานข้อมูล) ที่ใช้ในหัวข้อที่ 9 แล้วเขียนทดสอบว่า login ซ้ำด้วย email เดิมสองครั้งได้ user คนเดียวกัน ไม่สร้างบัญชีซ้ำ
+7. ค้นคว้าเพิ่มเติมว่า `oauth2.GenerateVerifier()` กับ `oauth2.S256ChallengeOption()` ในหัวข้อที่ 10 ทำงานภายในอย่างไร (ดู source code ของ `golang.org/x/oauth2`) แล้วอธิบายด้วยคำพูดของตัวเองว่าทำไม SHA256 ถึงเพียงพอสำหรับป้องกันการปลอมแปลง `code_verifier`
+8. ออกแบบและอธิบายเป็นข้อความ (ไม่ต้องเขียนโค้ด) ว่าถ้าต้องทำระบบที่มีทั้งเว็บแอปสำหรับผู้ใช้ทั่วไปและ public API สำหรับนักพัฒนาภายนอก ท่านจะออกแบบให้ใช้ session, JWT หรือทั้งสองอย่างผสมกันอย่างไร เพราะเหตุใด
 
 ---
 
