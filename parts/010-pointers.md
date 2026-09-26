@@ -446,6 +446,7 @@ func main() {
 - Method ที่ต้องแก้ไขค่าภายใน struct ควรใช้ pointer receiver (รายละเอียดเต็มใน Part 012)
 - Zero value ของ pointer คือ `nil` — dereference nil pointer ทำให้ panic ทันที ต้องเช็ค `!= nil` ก่อนเสมอเมื่อไม่แน่ใจ
 - การคืน pointer ไปยังตัวแปร local เป็นเรื่องปลอดภัยอย่างสมบูรณ์ใน Go เพราะ **escape analysis** จะย้ายตัวแปรนั้นไปอยู่บน heap โดยอัตโนมัติเมื่อจำเป็น ต่างจาก C ที่เป็น undefined behavior (dangling pointer) โดยสิ้นเชิง
+- Struct ที่มี field เป็น pointer ของ type ตัวเอง (self-referencing struct) ทำได้เพราะ pointer มีขนาดคงที่เสมอ — เป็นรากฐานของโครงสร้างข้อมูลอย่าง linked list, tree และ graph
 
 ## แบบฝึกหัดท้ายบท
 
@@ -455,6 +456,7 @@ func main() {
 4. เขียนฟังก์ชัน `makePair() (*int, *int)` ที่คืน pointer ไปยังตัวแปร local สองตัวที่ไม่เกี่ยวข้องกัน แล้วพิสูจน์ด้วยการรันจริงว่าทั้งสอง pointer เป็นอิสระต่อกัน ไม่แชร์หน่วยความจำเดียวกัน
 5. อธิบายด้วยคำพูดตัวเองว่า escape analysis คืออะไร และทำไมการคืน pointer ไปยังตัวแปร local ถึงปลอดภัยใน Go แต่เป็นอันตรายใน C (เตรียมคำตอบไว้ให้ชัดเจน เพราะเป็นคำถามสัมภาษณ์งาน Go ที่พบบ่อยมาก)
 6. ลองรันคำสั่ง `go build -gcflags="-m" .` กับโค้ดในแบบฝึกหัดข้อ 4 แล้วสังเกตข้อความที่ compiler รายงาน เช่น `moved to heap: count` ซึ่งยืนยันว่า escape analysis ตัดสินใจย้ายตัวแปรนั้นไปไว้บน heap จริง
+7. เขียน struct `TreeNode` ที่มี field `Value int`, `Left *TreeNode`, `Right *TreeNode` แล้วเขียนฟังก์ชัน `insert(root *TreeNode, value int) *TreeNode` เพื่อสร้าง binary search tree อย่างง่าย และฟังก์ชัน `inorder(root *TreeNode)` เพื่อพิมพ์ค่าตามลำดับ in-order (ซ้าย-กลาง-ขวา)
 
 ---
 
