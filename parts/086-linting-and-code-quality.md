@@ -198,19 +198,19 @@ golangci-lint run ./...
 ผลลัพธ์จริง:
 
 ```
-main.go:19:11: Error return value of `os.Remove` is not checked (errcheck)
+main.go:20:11: Error return value of `os.Remove` is not checked (errcheck)
 	os.Remove(path) // errcheck: ไม่เช็คค่า error ที่ return กลับมา
 	         ^
-main.go:13:2: ineffectual assignment to msg (ineffassign)
+main.go:14:2: ineffectual assignment to msg (ineffassign)
 	msg = msg + name // จะกลายเป็น ineffectual assignment เพราะถูกเขียนทับด้านล่างโดยไม่เคยถูกอ่านก่อน
 	^
-main.go:42:5: S1002: should omit comparison to bool constant, can be simplified to ok (staticcheck)
+main.go:28:5: S1002: should omit comparison to bool constant, can be simplified to ok (staticcheck)
 	if ok == true { // staticcheck (S1002): เทียบ bool กับ true ตรงๆ โดยไม่จำเป็น
 	   ^
-main.go:8:7: const maxRetries is unused (unused)
+main.go:9:7: const maxRetries is unused (unused)
 const maxRetries = 5 // ไม่มีใครเรียกใช้ constant นี้เลยในโค้ดทั้งไฟล์
       ^
-main.go:22:6: func unusedHelper is unused (unused)
+main.go:23:6: func unusedHelper is unused (unused)
 func unusedHelper() int {
      ^
 5 issues:
@@ -231,7 +231,7 @@ func unusedHelper() int {
 ### `errcheck`: ตรวจจับ error ที่ไม่ได้เช็ค
 
 ```
-main.go:19:11: Error return value of `os.Remove` is not checked (errcheck)
+main.go:20:11: Error return value of `os.Remove` is not checked (errcheck)
 ```
 
 ทบทวนจาก **Part 015**: Go บังคับให้ error เป็นค่า return ธรรมดา ไม่ใช่ exception ที่บังคับให้ต้องจัดการ — ข้อดีคือความชัดเจน แต่ข้อเสียคือ **ไม่มีอะไรบังคับให้โปรแกรมเมอร์เช็ค error จริงๆ** เขียน `os.Remove(path)` เฉยๆ โดยไม่รับค่า return ก็ compile ผ่านได้สบาย ทั้งที่การลบไฟล์อาจล้มเหลวได้หลายสาเหตุ (ไฟล์ไม่มีอยู่, ไม่มีสิทธิ์เข้าถึง) `errcheck` คือ linter ที่อุดช่องโหว่นี้ — เป็นหนึ่งใน linter ที่ **สำคัญที่สุด** สำหรับทีมที่จริงจังเรื่อง error handling
@@ -239,7 +239,7 @@ main.go:19:11: Error return value of `os.Remove` is not checked (errcheck)
 ### `ineffassign`: ตรวจจับการเขียนทับค่าที่ไม่เคยถูกอ่าน
 
 ```
-main.go:13:2: ineffectual assignment to msg (ineffassign)
+main.go:14:2: ineffectual assignment to msg (ineffassign)
 ```
 
 `msg = msg + name` คำนวณค่าขึ้นมาแล้วเก็บไว้ในตัวแปร `msg` แต่บรรทัดถัดไป (`msg = fmt.Sprintf(...)`) เขียนทับค่านั้นทันทีโดยไม่เคยอ่านค่าเก่าเลย — การคำนวณทั้งหมดในบรรทัดแรกจึง **สูญเปล่าโดยสมบูรณ์** สถานการณ์แบบนี้มักเกิดจากการ refactor โค้ดที่ทำไม่สมบูรณ์ (ลืมลบ logic เก่าที่ไม่จำเป็นแล้วออก) `ineffassign` ช่วยจับ "โค้ดที่ตายแล้วแต่ยังไม่รู้ตัว" แบบนี้ได้ดีมาก
@@ -247,8 +247,8 @@ main.go:13:2: ineffectual assignment to msg (ineffassign)
 ### `unused`: ตรวจจับ identifier ระดับ package ที่ไม่มีใครใช้
 
 ```
-main.go:8:7: const maxRetries is unused (unused)
-main.go:22:6: func unusedHelper is unused (unused)
+main.go:9:7: const maxRetries is unused (unused)
+main.go:23:6: func unusedHelper is unused (unused)
 ```
 
 ทบทวนจาก **Part 001**: ตัวแปร local ที่ไม่ได้ใช้เป็น **compile error** ทันทีอยู่แล้ว (บังคับความสะอาดของโค้ดตั้งแต่ระดับ compiler) แต่กฎนี้ **ใช้ไม่ได้กับ identifier ระดับ package** เช่น function, constant, type, หรือ struct field ที่ export หรือ unexported ก็ตาม — โค้ดข้างบนมี `const maxRetries` และ `func unusedHelper` ที่ไม่มีใครเรียกใช้เลย แต่ compile ผ่านสบายเพราะกฎ "unused = compile error" ครอบคลุมแค่ตัวแปร local เท่านั้น linter `unused` เข้ามาอุดช่องว่างนี้ในระดับ package — มีประโยชน์มากในการเก็บกวาดโค้ดที่ตายแล้ว (dead code) ที่ค้างมาจากการ refactor ในโปรเจกต์ระยะยาว
@@ -256,7 +256,7 @@ main.go:22:6: func unusedHelper is unused (unused)
 ### `staticcheck`: ชุดกฎมาตรฐานคุณภาพสูงจากชุมชน
 
 ```
-main.go:42:5: S1002: should omit comparison to bool constant, can be simplified to ok (staticcheck)
+main.go:28:5: S1002: should omit comparison to bool constant, can be simplified to ok (staticcheck)
 ```
 
 `staticcheck` เป็นเครื่องมือ static analysis อิสระที่ทรงพลังมาก (สามารถใช้แยกเดี่ยวได้โดยไม่ต้องผ่าน `golangci-lint` ด้วย) `golangci-lint` นำมันมารวมไว้เป็นหนึ่งใน linter ของตัวเอง กฎรหัส `S1002` ตรวจพบว่า `if ok == true` เป็นการเขียนที่ยืดยาวโดยไม่จำเป็น เพราะ `ok` เป็น `bool` อยู่แล้ว เขียน `if ok` ตรงๆ ก็ได้ความหมายเดียวกันและอ่านง่ายกว่า — เป็นตัวอย่างของกฎประเภท **"simplification"** ที่ไม่ใช่บั๊ก แต่ช่วยให้โค้ดกระชับและเป็นสำนวน Go มากขึ้น (idiomatic)
@@ -293,22 +293,22 @@ golangci-lint run ./...
 ผลลัพธ์จริง:
 
 ```
-main.go:19:11: Error return value of `os.Remove` is not checked (errcheck)
+main.go:20:11: Error return value of `os.Remove` is not checked (errcheck)
 	os.Remove(path) // errcheck: ไม่เช็คค่า error ที่ return กลับมา
 	         ^
-main.go:29:3: shadow: declaration of "x" shadows declaration at line 27 (govet)
+main.go:37:3: shadow: declaration of "x" shadows declaration at line 35 (govet)
 		x := 20 // shadow: ประกาศตัวแปรชื่อซ้ำในขอบเขตย่อย บัง x ตัวนอก
 		^
-main.go:13:2: ineffectual assignment to msg (ineffassign)
+main.go:14:2: ineffectual assignment to msg (ineffassign)
 	msg = msg + name // จะกลายเป็น ineffectual assignment เพราะถูกเขียนทับด้านล่างโดยไม่เคยถูกอ่านก่อน
 	^
-main.go:42:5: S1002: should omit comparison to bool constant, can be simplified to ok (staticcheck)
+main.go:28:5: S1002: should omit comparison to bool constant, can be simplified to ok (staticcheck)
 	if ok == true { // staticcheck (S1002): เทียบ bool กับ true ตรงๆ โดยไม่จำเป็น
 	   ^
-main.go:8:7: const maxRetries is unused (unused)
+main.go:9:7: const maxRetries is unused (unused)
 const maxRetries = 5 // ไม่มีใครเรียกใช้ constant นี้เลยในโค้ดทั้งไฟล์
       ^
-main.go:22:6: func unusedHelper is unused (unused)
+main.go:23:6: func unusedHelper is unused (unused)
 func unusedHelper() int {
      ^
 6 issues:
@@ -319,7 +319,7 @@ func unusedHelper() int {
 * unused: 2
 ```
 
-ตอนนี้ **`shadow: declaration of "x" shadows declaration at line 27 (govet)` ปรากฏขึ้นมาแล้ว** — รวมเป็น 6 ปัญหาทั้งหมด ครอบคลุมทุกจุดที่ตั้งใจใส่ไว้ในตัวอย่าง นี่คือเหตุผลที่การตั้งค่า `.golangci.yml` ให้เหมาะกับทีมมีความสำคัญมาก: **ค่า default ให้จุดเริ่มต้นที่ดี แต่การตั้งค่าเพิ่มเติมช่วยจับปัญหาที่ลึกและอันตรายกว่าได้อีกมาก**
+ตอนนี้ **`shadow: declaration of "x" shadows declaration at line 35 (govet)` ปรากฏขึ้นมาแล้ว** — รวมเป็น 6 ปัญหาทั้งหมด ครอบคลุมทุกจุดที่ตั้งใจใส่ไว้ในตัวอย่าง นี่คือเหตุผลที่การตั้งค่า `.golangci.yml` ให้เหมาะกับทีมมีความสำคัญมาก: **ค่า default ให้จุดเริ่มต้นที่ดี แต่การตั้งค่าเพิ่มเติมช่วยจับปัญหาที่ลึกและอันตรายกว่าได้อีกมาก**
 
 ---
 

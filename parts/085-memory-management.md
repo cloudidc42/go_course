@@ -494,14 +494,14 @@ func TestAllocs_InterfaceBoxing(t *testing.T) {
 go build -gcflags="-m" numformat.go
 ```
 
-ผลลัพธ์ (ตัดเฉพาะบรรทัดสำคัญ):
+ผลลัพธ์จริง (ตัดเฉพาะบรรทัดสำคัญ):
 
 ```
-./numformat.go:10:21: n escapes to heap
-./numformat.go:14:20: ... argument does not escape
+./numformat.go:9:20: ... argument does not escape
+./numformat.go:9:27: n escapes to heap
 ```
 
-บรรทัดแรกยืนยันตรงตามที่อธิบาย: `n` (ที่ส่งเข้า `fmt.Sprintf` ผ่าน `...any`) escape ไป heap เพราะถูกกล่องลง interface ในขณะที่ `strconv.Itoa` ไม่มีข้อความ escape สำหรับ `n` เลยเพราะรับ parameter เป็น `int` ตรงๆ
+ทั้งสองบรรทัดชี้ไปที่บรรทัดเดียวกัน — บรรทัดที่เรียก `fmt.Sprintf("%d", n)` ภายใน `FormatSprintf`: **`n escapes to heap`** ยืนยันตรงตามที่อธิบาย คือ `n` ถูกกล่องลง interface (`any`) ก่อนส่งเป็น variadic argument ส่วน **`... argument does not escape`** หมายถึง slice ของ `...any` ที่ compiler สร้างขึ้นเพื่อรวบรวม argument ทั้งหมดไม่ได้ escape ไปไหน (มันไม่ต้อง เพราะ `fmt.Sprintf` ใช้แล้วทิ้งภายในฟังก์ชันตัวเอง) — ตัว **`n`** ต่างหากที่ต้อง escape เพราะค่าที่มันชี้ไปในกล่อง interface ต้องมีอายุอยู่ยืนกว่า stack frame ปัจจุบัน ในขณะที่ถ้ารันคำสั่งเดียวกันกับ `FormatItoa` (ที่เรียก `strconv.Itoa(n)`) จะ**ไม่มีข้อความ escape ใดๆ เกี่ยวกับ `n` เลย** เพราะ `strconv.Itoa` รับ parameter เป็น `int` ตรงๆ ไม่ผ่าน interface
 
 **ข้อควรระวังเรื่องความสมดุล**: กฎนี้ใช้เฉพาะจุดที่พิสูจน์แล้วว่าเป็น hot path เท่านั้น การเขียน log ทั่วไปในโค้ด business logic ธรรมดาที่เรียกไม่บ่อย **ไม่จำเป็นต้องกังวลเรื่องนี้เลย** — `fmt.Sprintf`/`log.Printf` อ่านง่ายกว่ามากและควรเป็นค่าเริ่มต้นเสมอ จนกว่า profiling จะชี้ชัดว่าจุดนั้นเป็นคอขวดจริง (จะย้ำเรื่องนี้อีกครั้งในหัวข้อสุดท้ายของบทนี้)
 
