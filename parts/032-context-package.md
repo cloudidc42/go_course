@@ -442,6 +442,48 @@ func main() {
 - ใช้ `httptest.NewServer` (จาก package `net/http/httptest`) เพื่อจำลอง server จริงในการทดสอบโดยไม่ต้องพึ่ง network ภายนอก — เครื่องมือนี้จะเรียนอย่างละเอียดใน **Part 081 (`httptest` — ทดสอบ HTTP Handler)** บทนี้แค่ใช้มันเป็นเครื่องมือช่วยสาธิตเท่านั้น
 - error ที่ได้จาก `http.DefaultClient.Do` จะห่อ (wrap) ข้อความ `context deadline exceeded` เอาไว้ข้างใน — สามารถใช้ `errors.Is(err, context.DeadlineExceeded)` (ทบทวนจาก **Part 016**) เพื่อตรวจสอบสาเหตุที่แท้จริงได้อย่างแม่นยำ แทนการเทียบ error message เป็น string ตรงๆ ซึ่งเป็นวิธีที่ไม่แนะนำ
 
+มาพิสูจน์การใช้ `errors.Is` กับ context error ให้เห็นชัดๆ อีกครั้ง:
+
+```go
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"time"
+)
+
+func main() {
+	slowServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(500 * time.Millisecond)
+	}))
+	defer slowServer.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, slowServer.URL, nil)
+	_, err := http.DefaultClient.Do(req)
+
+	if errors.Is(err, context.DeadlineExceeded) {
+		fmt.Println("ยืนยันแล้ว: request ถูกยกเลิกเพราะ timeout จริงๆ ไม่ใช่ error อื่น")
+	} else {
+		fmt.Println("error อื่นที่ไม่ใช่ timeout:", err)
+	}
+}
+```
+
+ผลลัพธ์:
+
+```
+ยืนยันแล้ว: request ถูกยกเลิกเพราะ timeout จริงๆ ไม่ใช่ error อื่น
+```
+
+แม้ error message ดิบที่ได้จาก `http.DefaultClient.Do` จะมีรายละเอียดอื่นปนมาด้วย (เช่น URL, ชื่อ method) แต่ `errors.Is` สามารถ "มองทะลุ" ข้อความเหล่านั้นไปหา error ต้นตอที่แท้จริง (`context.DeadlineExceeded`) ที่ถูกห่อซ้อนอยู่ข้างในได้อย่างแม่นยำ — นี่คือเหตุผลที่ **Part 016** เน้นย้ำว่าไม่ควรเทียบ error ด้วยการเทียบข้อความ string ตรงๆ เพราะข้อความอาจเปลี่ยนแปลงได้ตลอดเวลาโดยไม่กระทบ logic ที่ถูกต้อง
+
 ตัวอย่างนี้แสดงให้เห็นภาพรวมของทั้งบทอย่างครบถ้วน: สร้าง context ด้วย `WithTimeout`, ส่งต่อเป็น parameter ตัวแรกตาม convention, ผูกเข้ากับการทำงานจริง (HTTP request), และ `defer cancel()` เพื่อไม่ให้ resource รั่วไหล — รูปแบบนี้จะเป็นรากฐานสำคัญเมื่อไปเรียน HTTP server/client อย่างเต็มรูปแบบใน **ภาคที่ 5 (Web Development)**
 
 ---

@@ -10,10 +10,11 @@
 4. เจาะลึกทีละขั้นตอน: jobs channel, results channel, WaitGroup
 5. การปิด channel อย่างปลอดภัยเมื่อ worker ทำงานเสร็จ
 6. การเลือกขนาด Pool: CPU-bound vs I/O-bound
-7. Worker Pool ที่ยกเลิกได้ด้วย `errgroup` และ `context`
-8. ข้อผิดพลาดที่พบบ่อยเมื่อเขียน Worker Pool
-9. สรุปสิ่งที่ได้เรียนในบทนี้
-10. แบบฝึกหัดท้ายบท
+7. พิสูจน์ด้วย Benchmark จริง: ขนาด Pool ส่งผลต่อความเร็วแค่ไหน
+8. Worker Pool ที่ยกเลิกได้ด้วย `errgroup` และ `context`
+9. ข้อผิดพลาดที่พบบ่อยเมื่อเขียน Worker Pool
+10. สรุปสิ่งที่ได้เรียนในบทนี้
+11. แบบฝึกหัดท้ายบท
 
 ---
 
@@ -268,7 +269,104 @@ func main() {
 
 ---
 
-## 7. Worker Pool ที่ยกเลิกได้ด้วย `errgroup` และ `context`
+## 7. พิสูจน์ด้วย Benchmark จริง: ขนาด Pool ส่งผลต่อความเร็วแค่ไหน
+
+หัวข้อ 6 อธิบายทฤษฎีไว้แล้วว่า CPU-bound ควรใช้ `runtime.NumCPU()` แต่คำแนะนำที่ดีที่สุดคือ **อย่าเชื่อทฤษฎีเฉยๆ ให้วัดผลจริงด้วย benchmark** (ทบทวนการเขียน benchmark จาก Part 034) มาลองวัดกันจริงๆ ด้วยงาน CPU-bound: ตรวจสอบว่าตัวเลขเป็นจำนวนเฉพาะ (prime) หรือไม่ จากช่วงตัวเลขที่ใหญ่พอจะทำให้แต่ละงาน "หนัก" พอสมควร
+
+```go
+package pool
+
+import (
+	"sync"
+	"testing"
+)
+
+// isPrime คืองาน CPU-bound ง่ายๆ ไว้ทดลองวัดผล benchmark ของขนาด pool ต่างๆ
+func isPrime(n int) bool {
+	if n < 2 {
+		return false
+	}
+	for i := 2; i*i <= n; i++ {
+		if n%i == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// runPool ประมวลผลตัวเลขในช่วง [start, start+count) ด้วย worker pool ขนาด numWorkers ตัว
+// ใช้เลขเริ่มต้นสูง (10,000,000+) เพื่อให้แต่ละงาน "หนัก" พอจะเห็นผลต่างจากจำนวน worker ชัดเจน
+func runPool(numWorkers, start, count int) int {
+	jobs := make(chan int, count)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	primeCount := 0
+
+	for w := 0; w < numWorkers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for n := range jobs {
+				if isPrime(n) {
+					mu.Lock()
+					primeCount++
+					mu.Unlock()
+				}
+			}
+		}()
+	}
+
+	for i := start; i < start+count; i++ {
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
+
+	return primeCount
+}
+
+const (
+	benchStart = 10_000_000
+	benchCount = 4000
+)
+
+func BenchmarkPool1(b *testing.B)  { for i := 0; i < b.N; i++ { runPool(1, benchStart, benchCount) } }
+func BenchmarkPool2(b *testing.B)  { for i := 0; i < b.N; i++ { runPool(2, benchStart, benchCount) } }
+func BenchmarkPool4(b *testing.B)  { for i := 0; i < b.N; i++ { runPool(4, benchStart, benchCount) } }
+func BenchmarkPool16(b *testing.B) { for i := 0; i < b.N; i++ { runPool(16, benchStart, benchCount) } }
+```
+
+รันด้วย `go test -bench=. -benchtime=5x` บนเครื่องที่มี `runtime.NumCPU()` เท่ากับ 4 (ตามตัวอย่างในหัวข้อ 6):
+
+```
+goos: linux
+goarch: amd64
+pkg: pool
+cpu: Intel(R) Xeon(R) Processor @ 2.80GHz
+BenchmarkPool1-4    	       5	   9723645 ns/op
+BenchmarkPool2-4    	       5	   4774121 ns/op
+BenchmarkPool4-4    	       5	   2812776 ns/op
+BenchmarkPool16-4   	       5	   2830296 ns/op
+PASS
+ok  	pool	0.131s
+```
+
+ตัวเลขนี้ยืนยันทฤษฎีในหัวข้อ 6 ได้ชัดเจนมาก:
+
+| ขนาด Pool | เวลาเฉลี่ยต่อรอบ | เทียบกับ Pool ขนาด 1 |
+|---|---|---|
+| 1 worker | ~9.7 ms | 1× (baseline) |
+| 2 workers | ~4.8 ms | เร็วขึ้นเกือบ 2 เท่า |
+| 4 workers | ~2.8 ms | เร็วขึ้นเกือบ 3.5 เท่า |
+| 16 workers | ~2.8 ms | **ไม่เร็วขึ้นอีกเลย** |
+
+จำนวน worker ที่เพิ่มจาก 1 → 2 → 4 ทำให้เร็วขึ้นเกือบเป็นสัดส่วนตรง (near-linear speedup) เพราะเครื่องนี้มี 4 core จริง แต่พอเพิ่มจาก 4 → 16 **ความเร็วแทบไม่ต่างกันเลย** เพราะ core ทั้ง 4 ทำงานเต็มประสิทธิภาพอยู่แล้วตั้งแต่ 4 worker การเปิด worker เพิ่มอีก 12 ตัวมีแต่จะเพิ่ม context switching overhead โดยไม่ได้ throughput เพิ่มขึ้นจริง — นี่คือหลักฐานเชิงประจักษ์ที่ตรงกับคำแนะนำ `numWorkers := runtime.NumCPU()` สำหรับงาน CPU-bound แบบเป๊ะๆ
+
+ข้อคิดสำคัญ: **ตัวเลขที่ได้จาก benchmark นี้เป็นจริงเฉพาะบนเครื่องที่รันเท่านั้น** เครื่องที่มี core มากกว่าหรือน้อยกว่า หรืองานที่มีลักษณะต่างออกไป (เช่น I/O-bound) จะได้กราฟที่หน้าตาต่างไปโดยสิ้นเชิง (ดูหัวข้อ 6) นี่คือเหตุผลที่ควรรัน benchmark บนเครื่องเป้าหมายจริงหรือใกล้เคียงกับ production มากที่สุด แทนที่จะเชื่อตัวเลขจากเครื่องอื่นหรือจากบทเรียนนี้ตรงๆ
+
+---
+
+## 8. Worker Pool ที่ยกเลิกได้ด้วย `errgroup` และ `context`
 
 Worker Pool แบบพื้นฐานที่เห็นไปมีข้อจำกัด: ถ้า worker ตัวใดตัวหนึ่งเจอ error ร้ายแรง (เช่น token หมดอายุ, service ปลายทางล่ม) เรา**ไม่มีกลไกบอก worker ตัวอื่นให้หยุดทำงานทันที** — worker ตัวอื่นจะทำงานต่อไปเรื่อยๆ จนกว่างานจะหมด ซึ่งเปลืองทรัพยากรและอาจทำให้ error เกิดซ้ำซ้อน
 
@@ -389,7 +487,7 @@ worker 1: job 5 เสร็จ -> 50
 
 ---
 
-## 8. ข้อผิดพลาดที่พบบ่อยเมื่อเขียน Worker Pool
+## 9. ข้อผิดพลาดที่พบบ่อยเมื่อเขียน Worker Pool
 
 ### ข้อผิดพลาดที่ 1: ปิด jobs channel ก่อนส่งงานครบ
 
@@ -435,6 +533,7 @@ for w := 1; w <= numWorkers; w++ {
 - `sync.WaitGroup` ใช้รู้ว่า worker ทุกตัวทำงานเสร็จเมื่อไร เพื่อปิด results channel ได้อย่างปลอดภัยผ่าน goroutine แยกต่างหาก
 - กฎทอง: ฝั่งที่ "ส่ง" ต้องเป็นคนปิด channel เสมอ และควรมีเจ้าของเพียงจุดเดียวต่อ channel
 - ขนาด Pool ที่เหมาะสมขึ้นอยู่กับลักษณะงาน: CPU-bound ใช้ `runtime.NumCPU()`, I/O-bound มักใช้มากกว่านั้นหลายเท่าและต้องวัดผลจริง
+- Benchmark จริงยืนยันว่างาน CPU-bound scale เกือบเป็นเส้นตรงจนถึงจำนวน core ที่มี แล้วคงที่ (ไม่เร็วขึ้นอีก) เมื่อเพิ่ม worker เกินจำนวน core — ควรวัดผลบนเครื่องเป้าหมายจริงเสมอแทนที่จะเดา
 - `golang.org/x/sync/errgroup` รวม goroutine management + error propagation + context cancellation ไว้ในที่เดียว เหมาะกับ Worker Pool ที่ต้องหยุดทันทีเมื่อเจอ error แรก
 - ข้อผิดพลาดที่พบบ่อย: ปิด channel ผิดจังหวะ, `wg.Add()` ผิดตำแหน่ง, เปิด worker มากเกินจำเป็น
 
@@ -443,8 +542,8 @@ for w := 1; w <= numWorkers; w++ {
 1. ดัดแปลงตัวอย่างในหัวข้อ 3 ให้ประมวลผลงาน 50 ชิ้นแทน 12 ชิ้น แล้วลองปรับ `numWorkers` เป็น 1, 5, 20 ตามลำดับ สังเกตความเร็วรวมที่เปลี่ยนไป (ใช้ `time.Since` วัดเวลา) แล้วอธิบายว่าทำไมเพิ่ม worker เกินจุดหนึ่งแล้วความเร็วไม่ต่างกันมาก
 2. เขียน Worker Pool ที่ประมวลผล error ของแต่ละ job แยกจากผลลัพธ์ปกติ (เช่น ให้ `Result` มี field `Err error` แทนที่จะให้ error ทำให้ทั้งโปรแกรมหยุด) — ใช้แนวทางไหนดีกว่ากันระหว่างวิธีนี้กับการใช้ `errgroup`?
 3. ทดลองลบ `close(jobs)` ออกจากตัวอย่างในหัวข้อ 3 แล้วรันดู เกิดอะไรขึ้น? อธิบายด้วยคำพูดของตัวเองว่าทำไมโปรแกรมไม่จบ (deadlock)
-4. เขียนโปรแกรมวัดว่า `runtime.NumCPU()` บนเครื่องของคุณคืนค่าเท่าไร แล้วลองรัน Worker Pool แบบ CPU-bound จริง (เช่น คำนวณจำนวนเฉพาะ) โดยปรับ `numWorkers` ให้เท่ากับ, น้อยกว่า และมากกว่า `NumCPU()` วัดเวลาที่ใช้แต่ละกรณีเปรียบเทียบกัน
-5. ดัดแปลงตัวอย่าง `errgroup` ในหัวข้อ 7 ให้จำลอง error ที่ job หลายตัวพร้อมกัน (เช่น job ที่หารด้วย 3 และ 7 ลงตัวทั้งคู่ error) แล้วสังเกตว่า error ที่ `g.Wait()` คืนกลับมาคือ error ของ job ไหน อธิบายว่าทำไมถึงเป็นแบบนั้น
+4. รัน benchmark ในหัวข้อ 7 บนเครื่องของคุณเอง (ซึ่งอาจมี `runtime.NumCPU()` ต่างจากตัวอย่าง) แล้วเพิ่ม `BenchmarkPool8` เข้าไปด้วย บันทึกผลลัพธ์ทั้งหมดเป็นตาราง แล้วอธิบายว่าจุดที่ความเร็ว "คงที่" (plateau) เกิดขึ้นที่ขนาด pool เท่าไรบนเครื่องของคุณ ตรงกับ `NumCPU()` หรือไม่
+5. ดัดแปลงตัวอย่าง `errgroup` ในหัวข้อ 8 ให้จำลอง error ที่ job หลายตัวพร้อมกัน (เช่น job ที่หารด้วย 3 และ 7 ลงตัวทั้งคู่ error) แล้วสังเกตว่า error ที่ `g.Wait()` คืนกลับมาคือ error ของ job ไหน อธิบายว่าทำไมถึงเป็นแบบนั้น
 6. ลองเขียน Worker Pool เวอร์ชันที่ใช้ buffered channel ขนาดพอดีกับจำนวนงาน (เหมือนตัวอย่างหัวข้อ 3) เทียบกับเวอร์ชันที่ใช้ unbuffered channel ทั้ง jobs และ results — มีความแตกต่างด้าน timing หรือพฤติกรรมอย่างไรบ้าง?
 
 ---

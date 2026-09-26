@@ -10,9 +10,11 @@
 4. Fan-in: รวมหลาย channel กลับเป็น channel เดียว
 5. ตัวอย่างสมบูรณ์: Pipeline แบบ Fan-out แล้ว Fan-in
 6. Done Channel: กลไกยกเลิก pipeline กลางคัน
-7. เมื่อไรควรใช้ Fan-out/Fan-in และเมื่อไรไม่ควร
-8. สรุปสิ่งที่ได้เรียนในบทนี้
-9. แบบฝึกหัดท้ายบท
+7. ปรับจำนวน Worker อัตโนมัติด้วย `runtime.NumCPU()`
+8. ข้อจำกัดสำคัญ: Fan-in ไม่รักษาลำดับผลลัพธ์
+9. เมื่อไรควรใช้ Fan-out/Fan-in และเมื่อไรไม่ควร
+10. สรุปสิ่งที่ได้เรียนในบทนี้
+11. แบบฝึกหัดท้ายบท
 
 ---
 
@@ -357,7 +359,171 @@ func main() {
 
 ---
 
-## 7. เมื่อไรควรใช้ Fan-out/Fan-in และเมื่อไรไม่ควร
+## 7. ปรับจำนวน Worker อัตโนมัติด้วย `runtime.NumCPU()`
+
+ในตัวอย่างหัวข้อ 3 เรา hardcode จำนวน worker ไว้ที่ 3 ตัว ในทางปฏิบัติ (เหมือนที่เรียนไปใน Part 041 หัวข้อ 6) มักปรับจำนวนตาม `runtime.NumCPU()` แทน โดยเฉพาะเมื่อ stage นั้นเป็นงาน CPU-bound:
+
+```go
+package main
+
+import (
+	"fmt"
+	"runtime"
+	"sync"
+)
+
+func generator(nums ...int) <-chan int {
+	out := make(chan int)
+	go func() {
+		defer close(out)
+		for _, n := range nums {
+			out <- n
+		}
+	}()
+	return out
+}
+
+func square(in <-chan int) <-chan int {
+	out := make(chan int)
+	go func() {
+		defer close(out)
+		for n := range in {
+			out <- n * n
+		}
+	}()
+	return out
+}
+
+// fanOutN ปรับจำนวน worker อัตโนมัติตาม runtime.NumCPU() แทนที่จะ hardcode
+func fanOutN(in <-chan int) []<-chan int {
+	n := runtime.NumCPU()
+	outs := make([]<-chan int, n)
+	for i := 0; i < n; i++ {
+		outs[i] = square(in)
+	}
+	return outs
+}
+
+func fanIn(channels ...<-chan int) <-chan int {
+	out := make(chan int)
+	var wg sync.WaitGroup
+	wg.Add(len(channels))
+
+	for _, c := range channels {
+		go func(c <-chan int) {
+			defer wg.Done()
+			for n := range c {
+				out <- n
+			}
+		}(c)
+	}
+
+	go func() {
+		wg.Wait()
+		close(out)
+	}()
+
+	return out
+}
+
+func main() {
+	fmt.Println("จำนวน worker ที่ใช้ (ตาม NumCPU):", runtime.NumCPU())
+
+	source := generator(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20)
+	workers := fanOutN(source)
+	merged := fanIn(workers...)
+
+	sum := 0
+	count := 0
+	for n := range merged {
+		sum += n
+		count++
+	}
+	fmt.Printf("ประมวลผล %d ค่า, ผลรวม = %d\n", count, sum)
+}
+```
+
+ผลลัพธ์ (รันบนเครื่อง 4 core):
+
+```
+จำนวน worker ที่ใช้ (ตาม NumCPU): 4
+ประมวลผล 20 ค่า, ผลรวม = 2870
+```
+
+(1² + 2² + ... + 20² = 2870 ถูกต้องเสมอ) ข้อดีของการเขียนแบบนี้คือโค้ดชุดเดียวกัน**ปรับระดับความขนานให้เหมาะกับเครื่องที่รันโดยอัตโนมัติ** ไม่ต้องแก้ค่าคงที่เมื่อย้ายไปรันบนเครื่อง production ที่มีจำนวน core ต่างจากเครื่อง dev
+
+---
+
+## 8. ข้อจำกัดสำคัญ: Fan-in ไม่รักษาลำดับผลลัพธ์
+
+สิ่งหนึ่งที่ต้องระวังให้มากเมื่อใช้ fan-out/fan-in คือ **ลำดับของผลลัพธ์ที่ออกมาจาก `fanIn` ไม่รับประกันว่าจะตรงกับลำดับที่ส่งเข้าไปใน `generator`** เพราะ worker แต่ละตัวใช้เวลาทำงานไม่เท่ากัน (ขึ้นกับ scheduler, ภาระงานของแต่ละ core ณ ขณะนั้น) ตัวที่ทำงานเสร็จก่อนก็ส่งผลลัพธ์เข้า `fanIn` ก่อน ไม่ว่าจะได้รับงานที่ index เท่าไรมาก็ตาม
+
+สำหรับงานที่ **ไม่สนใจลำดับ** (เช่นตัวอย่างการหาผลรวมทั้งหมดที่ผ่านมา) นี่ไม่ใช่ปัญหา แต่ถ้าต้องการ**ผลลัพธ์เรียงตามลำดับ input เดิม** (เช่น ประมวลผลแต่ละบรรทัดของไฟล์แล้วต้องเขียนผลลัพธ์กลับไปในลำดับเดิม) ต้องเพิ่มกลไก **จับคู่ index** เข้าไปเอง (โค้ดด้านล่างใช้ `import ("fmt"; "math/rand"; "sync"; "time")` และ `fanOut`/`fanIn` แบบเดียวกับหัวข้อ 5 ทุกประการ เปลี่ยนแค่ชนิดข้อมูลที่ไหลผ่าน channel):
+
+```go
+// IndexedResult ห่อผลลัพธ์พร้อม index เดิม เพื่อให้เรียงลำดับคืนได้ทีหลัง
+type IndexedResult struct {
+	Index int
+	Value int
+}
+
+func generator(nums ...int) <-chan IndexedResult {
+	out := make(chan IndexedResult)
+	go func() {
+		defer close(out)
+		for i, n := range nums {
+			out <- IndexedResult{Index: i, Value: n}
+		}
+	}()
+	return out
+}
+
+// squareWithDelay จำลองว่างานแต่ละชิ้นใช้เวลาไม่เท่ากัน (สุ่ม) เพื่อพิสูจน์ว่าผลลัพธ์
+// จาก fan-out ตามธรรมชาติแล้วมาไม่เรียงลำดับ
+func squareWithDelay(in <-chan IndexedResult) <-chan IndexedResult {
+	out := make(chan IndexedResult)
+	go func() {
+		defer close(out)
+		for r := range in {
+			time.Sleep(time.Duration(rand.Intn(30)) * time.Millisecond)
+			out <- IndexedResult{Index: r.Index, Value: r.Value * r.Value}
+		}
+	}()
+	return out
+}
+```
+
+จากนั้นตอนอ่านผลลัพธ์จาก `fanIn` แทนที่จะพิมพ์ทันทีตามลำดับที่มาถึง ให้ **เก็บลง slice ตาม index เดิม**:
+
+```go
+func main() {
+	input := []int{1, 2, 3, 4, 5, 6, 7, 8}
+
+	source := generator(input...)
+	workers := fanOut(source, 3)
+	merged := fanIn(workers...)
+
+	// เก็บผลลัพธ์ลง slice ตาม index เดิม แทนที่จะพิมพ์ตามลำดับที่มาถึง
+	results := make([]int, len(input))
+	for r := range merged {
+		results[r.Index] = r.Value
+	}
+
+	fmt.Println("ผลลัพธ์เรียงลำดับตาม index เดิม:", results)
+}
+```
+
+รันด้วย `go run -race main.go` ซ้ำหลายครั้ง ผลลัพธ์จะเรียงลำดับถูกต้องเสมอแม้ worker แต่ละตัวจะทำงานเสร็จไม่พร้อมกัน:
+
+```
+ผลลัพธ์เรียงลำดับตาม index เดิม: [1 4 9 16 25 36 49 64]
+```
+
+**ทำไมการเขียน `results[r.Index] = r.Value` จากหลาย goroutine พร้อมกันจึงไม่เป็น data race** (ทั้งที่ยังไม่ได้เรียน Part 044 เรื่อง race detector อย่างเป็นทางการ)? เพราะแต่ละ goroutine เขียนลง **ตำแหน่ง (index) ที่ไม่ซ้ำกันเลย** ในหน่วยความจำของ slice เดียวกัน — Go memory model รับประกันว่าการเขียนไปยัง**ตำแหน่งหน่วยความจำที่ต่างกัน**ของ array/slice เดียวกันจากหลาย goroutine พร้อมกันนั้นปลอดภัย (ไม่ใช่ data race) ตราบใดที่ไม่มีตำแหน่งไหนถูกเขียนซ้ำจากมากกว่าหนึ่ง goroutine และ slice ไม่ถูก resize เพิ่มความจุระหว่างทาง (`results := make([]int, len(input))` กำหนดความยาวไว้แน่นอนตั้งแต่ต้น จึงไม่มีการจัดสรรหน่วยความจำใหม่ระหว่างเขียน) — รันตรวจสอบด้วย `go run -race` เพื่อยืนยันซ้ำอีกครั้งเสมอ อย่าเชื่อคำอธิบายเฉยๆ (จะเป็นหัวข้อหลักของ Part 044)
+
+---
+
+## 9. เมื่อไรควรใช้ Fan-out/Fan-in และเมื่อไรไม่ควร
 
 ### ควรใช้เมื่อ
 
@@ -381,13 +547,15 @@ func main() {
 - Pipeline ที่ประกอบจาก generator → fan-out → fan-in ทำให้แต่ละ stage มีหน้าที่ชัดเจนและนำกลับมาใช้ซ้ำ/ปรับขนาดแยกกันได้
 - **Done channel** (`chan struct{}`) ที่ส่งผ่านทุก stage คือกลไกป้องกัน goroutine leak เมื่อผู้บริโภคปลายทางเลิกอ่านข้อมูลกลางคัน — แนวคิดนี้มาจาก talk "Go Concurrency Patterns" ของ Rob Pike
 - ในทางปฏิบัติปัจจุบันนิยมใช้ `context.Context` แทน done channel มือเปล่า ซึ่งจะเรียนต่อใน Part 043
+- จำนวน worker ใน fan-out ปรับให้เหมาะกับเครื่องที่รันได้อัตโนมัติด้วย `runtime.NumCPU()` เช่นเดียวกับที่เรียนใน Worker Pool (Part 041)
+- **Fan-in ไม่รักษาลำดับผลลัพธ์เดิม** โดยธรรมชาติ ถ้าต้องการผลลัพธ์เรียงตามลำดับ input ต้องห่อข้อมูลด้วย index แล้วนำไปเก็บ/เรียงใหม่เองหลัง fan-in
 
 ## แบบฝึกหัดท้ายบท
 
 1. เพิ่ม stage ที่สามเข้าไปในตัวอย่างหัวข้อ 5: หลังจาก fan-in แล้ว ให้ fan-out อีกครั้งเพื่อกรองเฉพาะค่าที่เป็นเลขคู่ ก่อนจะรวมกลับด้วย fan-in อีกครั้ง (pipeline 5 stage รวม)
 2. เขียนฟังก์ชัน `merge` (คือ `fanIn`) เวอร์ชันที่รับ channel ชนิด generic ใดๆ ก็ได้ (`<-chan T`) โดยใช้ Go generics ที่เรียนไปใน Part 028-029
 3. ทดลองลบ `select`/`done` ออกจากตัวอย่างในหัวข้อ 6 (กลับไปใช้ `out <- n` ตรงๆ แบบหัวข้อ 2) แล้วรันพร้อม `break` กลางทาง สังเกตว่าโปรแกรมค้างหรือไม่ (ใบ้: ลองรันด้วย timeout เช่น `timeout 3 go run main.go` ใน terminal)
-4. ปรับ `fanOut` ในหัวข้อ 3 ให้จำนวน worker ปรับได้ตาม `runtime.NumCPU()` แทนที่จะ hardcode เป็น 3
+4. รันตัวอย่างในหัวข้อ 8 (`IndexedResult`) ซ้ำหลายครั้ง พร้อมพิมพ์ index ที่แต่ละ worker (ระบุด้วยหมายเลข goroutine หรือ log เพิ่มเอง) ได้รับจริง เพื่อพิสูจน์ด้วยตาตัวเองว่าลำดับที่ประมวลผลเสร็จไม่ตรงกับลำดับ index เดิม แต่ผลลัพธ์สุดท้ายที่เก็บใน slice ยังถูกต้องเสมอ
 5. เขียน pipeline ที่ generator สร้างชื่อไฟล์จำลอง (string) แทนตัวเลข, stage หนึ่งจำลองการ "อ่านไฟล์" (`time.Sleep`), อีก stage จำลองการนับจำนวนตัวอักษร แล้ว fan-in ผลรวมความยาวทั้งหมด
 6. ลองเขียน diagram (วาดมือหรือ ASCII art) ของ pipeline ในแบบฝึกหัดข้อ 1 อธิบายว่าที่จุดไหนของ pipeline เป็น fan-out และจุดไหนเป็น fan-in
 

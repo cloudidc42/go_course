@@ -11,10 +11,12 @@
 5. วิธีใช้งาน: `go run -race`, `go test -race`, `go build -race`
 6. อ่านผลลัพธ์ของ Race Detector ทีละส่วน
 7. แก้ไข Race Condition ด้วย Mutex แล้วยืนยันด้วย `-race` อีกครั้ง
-8. ข้อจำกัดของ Race Detector ที่ต้องรู้
-9. รัน `-race` ใน CI ทุกครั้งที่ทดสอบ (ทบทวนก่อน Part 098)
-10. สรุปสิ่งที่ได้เรียนในบทนี้
-11. แบบฝึกหัดท้ายบท
+8. Race บน map: เมื่อ Go หยุดโปรแกรมให้เองโดยไม่ต้องมี `-race`
+9. ตรวจจับ Race ใน Unit Test ด้วย `go test -race`
+10. ข้อจำกัดของ Race Detector ที่ต้องรู้
+11. รัน `-race` ใน CI ทุกครั้งที่ทดสอบ (ทบทวนก่อน Part 098)
+12. สรุปสิ่งที่ได้เรียนในบทนี้
+13. แบบฝึกหัดท้ายบท
 
 ---
 
@@ -247,7 +249,203 @@ func main() {
 
 ---
 
-## 8. ข้อจำกัดของ Race Detector ที่ต้องรู้
+## 8. Race บน map: เมื่อ Go หยุดโปรแกรมให้เองโดยไม่ต้องมี `-race`
+
+ตัวอย่างในหัวข้อ 3 เป็น data race บนตัวแปร `int` ธรรมดา ซึ่ง Go runtime **ไม่มีทางรู้เองว่าเกิด race** ถ้าไม่เปิด `-race` โปรแกรมจะรันต่อไปเงียบๆ พร้อมค่าที่อาจผิด แต่ `map` เป็นกรณีพิเศษ: **Go runtime มีกลไกตรวจจับการเขียน map พร้อมกันในตัว** (ทบทวนจาก Part 007 ว่า `map` ไม่ safe สำหรับการเขียนพร้อมกัน) และจะทำให้โปรแกรม **panic ทันทีแบบ fatal error** แม้จะไม่ได้เปิด `-race` เลยก็ตาม
+
+```go
+package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+func main() {
+	m := make(map[int]int)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			m[n] = n * n // เขียน map เดียวกันจากหลาย goroutine พร้อมกัน โดยไม่มี mutex
+		}(i)
+	}
+	wg.Wait()
+
+	fmt.Println("map มีสมาชิกทั้งหมด:", len(m))
+}
+```
+
+รันโปรแกรมนี้ซ้ำหลายครั้งแบบธรรมดา (ไม่ใช้ `-race` เลย):
+
+```bash
+go run map_race.go
+```
+
+ผลลัพธ์จากการรันจริง 4 ครั้งติดกัน:
+
+```
+map มีสมาชิกทั้งหมด: 20
+```
+
+```
+fatal error: concurrent map writes
+
+goroutine 24 [running]:
+internal/runtime/maps.fatal({0x4b8163?, 0x0?})
+	/usr/local/go1.24.7/src/runtime/panic.go:1058 +0x18
+main.main.func1(0x6)
+	/home/user/race-demo/map_race.go:16 +0x56
+created by main.main in goroutine 1
+	/home/user/race-demo/map_race.go:14 +0x45
+exit status 2
+```
+
+```
+fatal error: concurrent map writes
+...
+exit status 2
+```
+
+```
+fatal error: concurrent map writes
+...
+exit status 2
+```
+
+จาก 4 ครั้ง มีเพียงครั้งแรกที่ "รอด" (เพราะจังหวะการสลับ goroutine บังเอิญไม่ชนกัน) ส่วนอีก 3 ครั้งโปรแกรม crash ทันทีด้วย **`fatal error: concurrent map writes`** จุดที่ต้องสังเกตให้ดี:
+
+- นี่คือ **fatal error ของ runtime ไม่ใช่ panic ธรรมดา** — สังเกตว่าไม่มีคำว่า `panic:` นำหน้า และที่สำคัญกว่านั้นคือ **`recover()` ดักจับ fatal error แบบนี้ไม่ได้** (ต่างจาก panic ทั่วไปที่ Part 017 สอนให้ใช้ `recover()` ดักจับได้) เพราะ Go runtime มองว่านี่คือสถานะที่เสียหายเกินกว่าจะกู้คืนโปรแกรมต่อได้อย่างปลอดภัย โปรแกรมจึงถูกบังคับให้จบทันทีเสมอ
+- **ผลลัพธ์ไม่แน่นอน** (nondeterministic) เหมือนกับตัวอย่างตัวนับใน หัวข้อ 3 เป๊ะๆ — บางครั้งรอด บางครั้ง crash ทั้งที่โค้ดเหมือนกันทุกตัวอักษร นี่คือธรรมชาติของ data race ที่ต้องจำให้ขึ้นใจ
+- การที่ Go จับ concurrent map write ได้เองเป็นเพียง **กรณีพิเศษของ `map` เท่านั้น** ไม่ได้แปลว่า Go ตรวจจับ data race ได้ทุกกรณีโดยอัตโนมัติ — ตัวแปรชนิดอื่น (`int`, `struct`, `slice` ฯลฯ) ไม่มีกลไกป้องกันตัวเองแบบนี้เลย นี่คือเหตุผลที่ **ต้องพึ่ง `-race` เสมอ ไม่ใช่หวังพึ่ง fatal error ของ runtime**
+
+การแก้ไขคือใช้ `sync.Mutex` หรือ `sync.RWMutex` ล้อมรอบการเข้าถึง `map` เหมือนตัวอย่าง `Broker` ใน Part 045 หรือใช้ `sync.Map` (โครงสร้างข้อมูลพิเศษจาก package `sync` ที่ออกแบบมาสำหรับใช้งานแบบ concurrent โดยเฉพาะ เหมาะกับกรณีที่ key ส่วนใหญ่ถูกเขียนครั้งเดียวแล้วอ่านซ้ำบ่อยๆ)
+
+---
+
+## 9. ตรวจจับ Race ใน Unit Test ด้วย `go test -race`
+
+ในทางปฏิบัติ เราแทบไม่เขียน `func main()` เพื่อทดสอบ concurrency แบบตรงๆ แต่จะเขียนเป็น unit test (ทบทวนจาก Part 033-034) แล้วรันด้วย `go test -race` ซึ่งเป็นรูปแบบที่ใช้จริงใน CI ทุกวัน
+
+ตัวอย่าง: `Cache` แบบง่ายที่ยังไม่ได้ป้องกัน concurrency
+
+```go
+package cache
+
+// Cache คือตัวอย่าง struct ธรรมดาที่ยังไม่ได้ป้องกัน concurrency
+type Cache struct {
+	data map[string]int
+}
+
+func NewCache() *Cache {
+	return &Cache{data: make(map[string]int)}
+}
+
+func (c *Cache) Set(key string, value int) {
+	c.data[key] = value
+}
+
+func (c *Cache) Get(key string) int {
+	return c.data[key]
+}
+```
+
+พร้อม test ที่จำลองการใช้งานพร้อมกันจากหลาย goroutine (เช่น หลาย HTTP request เข้ามาพร้อมกันเรียก `Cache` ตัวเดียวกัน):
+
+```go
+package cache
+
+import (
+	"sync"
+	"testing"
+)
+
+// TestCacheConcurrent จำลองการใช้งาน Cache จากหลาย goroutine พร้อมกัน (เช่น หลาย request
+// เข้ามาพร้อมกันใน HTTP server) ถ้ารันด้วย go test -race จะเจอ data race ทันที
+func TestCacheConcurrent(t *testing.T) {
+	cache := NewCache()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			cache.Set("key", n)
+			_ = cache.Get("key")
+		}(i)
+	}
+	wg.Wait()
+}
+```
+
+รันด้วย:
+
+```bash
+go test -race ./...
+```
+
+ผลลัพธ์ (ตัดมาบางส่วนเพราะรายงานหลายจุดชนกัน):
+
+```
+==================
+WARNING: DATA RACE
+Write at 0x00c00011e600 by goroutine 8:
+  runtime.mapassign_faststr()
+      /usr/local/go/src/internal/runtime/maps/runtime_faststr_swiss.go:263 +0x0
+  cache.(*Cache).Set()
+      /home/user/race-demo/cache_test.go:18 +0xb4
+  cache.TestCacheConcurrent.func1()
+      /home/user/race-demo/cache_test.go:35 +0x8f
+  cache.TestCacheConcurrent.gowrap1()
+      /home/user/race-demo/cache_test.go:37 +0x41
+
+Previous write at 0x00c00011e600 by goroutine 16:
+  runtime.mapassign_faststr()
+      ...
+==================
+--- FAIL: TestCacheConcurrent (0.02s)
+FAIL
+```
+
+สังเกตว่า stack trace คราวนี้มี **สาม** เฟรมแทนที่จะมีสองเฟรมเหมือนตัวอย่างตัวนับ: `runtime.mapassign_faststr()` (ฟังก์ชันภายในของ runtime ที่จัดการเขียนค่าลง map) → `cache.(*Cache).Set()` (เมธอดของเราที่เรียก `c.data[key] = value`) → `cache.TestCacheConcurrent.func1()` (closure ที่เราเปิดเป็น goroutine ใน test) — การอ่าน stack trace แบบไล่จากบนลงล่างแบบนี้ช่วยให้เห็นชัดว่า "ตัวการ" ที่แท้จริงคือเมธอด `Set` ของเราเอง แม้ตัว error จะโผล่มาจากโค้ดภายใน runtime ก็ตาม
+
+หลังแก้ด้วย `sync.RWMutex` (แบบเดียวกับ `Broker` ใน Part 045):
+
+```go
+type SafeCache struct {
+	mu   sync.RWMutex
+	data map[string]int
+}
+
+func (c *SafeCache) Set(key string, value int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.data[key] = value
+}
+
+func (c *SafeCache) Get(key string) int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.data[key]
+}
+```
+
+รันซ้ำด้วย `go test -race -v ./...` ผลลัพธ์:
+
+```
+=== RUN   TestSafeCacheConcurrent
+--- PASS: TestSafeCacheConcurrent (0.00s)
+PASS
+ok  	cache	1.019s
+```
+
+`PASS` ที่ได้นี้มีความหมายมากกว่าการที่ assertion ผ่าน — มันหมายความว่า **ตลอดการรัน test ครั้งนี้ ไม่มี goroutine คู่ไหนเข้าถึงหน่วยความจำเดียวกันโดยไม่มี happens-before ระหว่างกันเลย** นี่คือเหตุผลที่ทีมพัฒนาที่ใช้ Go อย่างจริงจังถือว่า `go test -race` เป็นส่วนหนึ่งของคำนิยาม "test ผ่าน" ไม่ใช่แค่ทางเลือกเสริม
+
+---
+
+## 10. ข้อจำกัดของ Race Detector ที่ต้องรู้
 
 แม้ race detector จะทรงพลังมาก แต่ก็มีข้อจำกัดสำคัญที่ต้องเข้าใจ:
 
@@ -258,7 +456,7 @@ func main() {
 
 ---
 
-## 9. รัน `-race` ใน CI ทุกครั้งที่ทดสอบ (ทบทวนก่อน Part 098)
+## 11. รัน `-race` ใน CI ทุกครั้งที่ทดสอบ (ทบทวนก่อน Part 098)
 
 จากทุกอย่างที่เรียนมาในบทนี้ สรุปเป็นแนวปฏิบัติที่ควรยึดถือในทุกโปรเจกต์ Go ที่มีโค้ด concurrent:
 
@@ -283,6 +481,8 @@ func main() {
 - แนวคิดเบื้องหลังคือการติดตาม happens-before relationship ระหว่างการเข้าถึงหน่วยความจำผ่านกลไกคล้าย vector clock
 - ผลลัพธ์ของ race detector บอกตำแหน่ง read/write ที่ชนกัน, หมายเลข goroutine, และจุดที่ goroutine แต่ละตัวถูกสร้าง — อ่านแล้วสามารถระบุจุดบั๊กได้ตรงจุดทันที
 - แก้ไขด้วย `sync.Mutex` (หรือ `sync/atomic` สำหรับกรณีง่ายๆ) เพื่อสร้าง happens-before relationship ที่ชัดเจน แล้วยืนยันด้วย `-race` ซ้ำจนไม่มี warning
+- `map` ธรรมดาของ Go มีกลไกตรวจจับการเขียนพร้อมกันในตัว (fatal error: concurrent map writes ที่ `recover()` ดักไม่ได้) แต่ตัวแปรชนิดอื่นไม่มีกลไกป้องกันแบบนี้ ต้องพึ่ง `-race` เสมอ
+- `go test -race` คือรูปแบบที่ใช้จริงในทางปฏิบัติ — เขียน test ที่จำลองการเข้าถึงพร้อมกัน แล้วให้ `-race` เป็นผู้ตัดสินว่า test "ผ่าน" จริงหรือไม่ ไม่ใช่แค่ดู assertion
 - Race detector ตรวจจับได้เฉพาะ race ที่เกิดขึ้นจริงในการรันนั้น ไม่ใช่การพิสูจน์ว่าปลอดจาก race 100%
 - ควรรัน `go test -race ./...` เป็นส่วนบังคับของทุก CI pipeline เสมอ (รายละเอียดเต็มใน Part 098)
 
@@ -291,8 +491,8 @@ func main() {
 1. รันตัวอย่างในหัวข้อ 3 (`race_bad.go`) แบบไม่ใช้ `-race` สัก 10 ครั้งติดกัน บันทึกค่าที่ได้แต่ละครั้ง แล้วอธิบายว่าทำไมบางครั้งได้ 10000 บางครั้งได้ค่าน้อยกว่า
 2. รันตัวอย่างเดียวกันด้วย `go run -race` แล้วอ่านผลลัพธ์ที่ได้ ระบุว่าบรรทัดไหนคือ "Read", บรรทัดไหนคือ "Previous write" และ goroutine หมายเลขใดถูกสร้างจากบรรทัดไหน
 3. แก้ไข `race_bad.go` ด้วย `sync/atomic` (`atomic.Int64`) แทนที่จะใช้ `sync.Mutex` แล้วยืนยันด้วย `-race` ว่าไม่มี warning เหลืออยู่ เปรียบเทียบว่าโค้ดเวอร์ชันไหนอ่านง่ายกว่ากัน
-4. เขียนโปรแกรมใหม่ที่มี data race แบบอื่น (ไม่ใช่ตัวนับ) เช่น หลาย goroutine เขียนลง `map` เดียวกันพร้อมกันโดยไม่มี mutex (ทบทวนจาก Part 007 ว่า Go `map` ไม่ safe สำหรับการเขียนพร้อมกัน) แล้วสังเกตว่า Go แสดง error หรือ panic แบบไหนออกมา (ใบ้: ไม่ต้องใช้ `-race` ก็เจอ panic ได้ในกรณีนี้ ลองเทียบกับตอนใช้ `-race` ด้วย)
-5. เขียน unit test (ทบทวนจาก Part 033-034) สำหรับฟังก์ชัน `increment` เวอร์ชันที่แก้ไขแล้ว (หัวข้อ 7) แล้วรันด้วย `go test -race -count=5 ./...` อธิบายว่า flag `-count=5` มีประโยชน์อย่างไรเมื่อใช้ร่วมกับ `-race`
+4. รันตัวอย่าง `map_race.go` ในหัวข้อ 8 ซ้ำ 10 ครั้ง นับว่า "รอด" กี่ครั้งและ "fatal error" กี่ครั้ง แล้วทดลองใช้ `recover()` ครอบ goroutine ที่เขียน map ดู ยืนยันว่า `recover()` ดักจับ fatal error นี้ไม่ได้จริงตามที่บทเรียนอธิบายไว้
+5. เขียน unit test ของตัวเอง (ทบทวนจาก Part 033-034) สำหรับ `Cache`/`SafeCache` ในหัวข้อ 9 เพิ่มเติมอีก 1 เคส ที่ทดสอบการอ่านและเขียนพร้อมกันบน key ที่ต่างกันหลายตัว แล้วรันด้วย `go test -race -count=5 ./...` อธิบายว่า flag `-count=5` มีประโยชน์อย่างไรเมื่อใช้ร่วมกับ `-race`
 6. ค้นคว้าเพิ่มเติม: ThreadSanitizer (TSan) ที่ Go race detector ใช้เป็นฐาน ถูกพัฒนาขึ้นมาสำหรับภาษาอะไรเป็นภาษาแรก และใช้แนวคิดอะไรตรวจจับ race ในภาษานั้น (เตรียมคำตอบสั้นๆ ไว้อภิปรายกับเพื่อนร่วมชั้น)
 
 ---

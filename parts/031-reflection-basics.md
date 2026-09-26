@@ -11,10 +11,11 @@
 5. ตรวจสอบ Struct Fields และ Tags ที่ Runtime
 6. เบื้องหลัง `encoding/json`: Reflection ทำงานตรงไหน
 7. แก้ไขค่าผ่าน Reflection: `Elem()`, `CanSet()` และกฎ Addressability
-8. ข้อควรระวัง: ทำไม Reflection ช้าและทำลาย Type Safety ตอน Compile Time
-9. เมื่อไหร่ควรใช้ Reflection จริงๆ
-10. สรุปสิ่งที่ได้เรียนในบทนี้
-11. แบบฝึกหัดท้ายบท
+8. สร้างค่าใหม่แบบไดนามิกด้วย `reflect.New`
+9. ข้อควรระวัง: ทำไม Reflection ช้าและทำลาย Type Safety ตอน Compile Time
+10. เมื่อไหร่ควรใช้ Reflection จริงๆ
+11. สรุปสิ่งที่ได้เรียนในบทนี้
+12. แบบฝึกหัดท้ายบท
 
 ---
 
@@ -342,7 +343,58 @@ recovered panic: reflect: reflect.Value.SetString using unaddressable value
 
 ---
 
-## 8. ข้อควรระวัง: ทำไม Reflection ช้าและทำลาย Type Safety ตอน Compile Time
+## 8. สร้างค่าใหม่แบบไดนามิกด้วย `reflect.New`
+
+นอกจากอ่านและแก้ไขค่าที่มีอยู่แล้ว บางสถานการณ์ต้อง **สร้าง value ใหม่ขึ้นมาทั้งก้อนโดยรู้แค่ `reflect.Type`** โดยไม่รู้จัก concrete type ที่แน่ชัดตอนเขียนโค้ดเลย — สถานการณ์แบบนี้พบได้บ่อยในโค้ดของ `encoding/json` ตอน `Unmarshal` เข้า slice ของ struct หรือใน ORM ตอนต้อง "สร้างแถวใหม่" จากผลลัพธ์ query โดยไม่รู้ชนิดของ struct ปลายทางล่วงหน้า
+
+ฟังก์ชันที่ใช้คือ **`reflect.New(t Type) Value`** ทำงานคล้าย `new()` builtin ที่เรียนใน **Part 010** ทุกประการ แต่รับ `reflect.Type` แทนการระบุชื่อ type ตรงๆ ในโค้ด และคืนค่าเป็น `reflect.Value` ที่เป็น **pointer** ไปยัง value ใหม่ที่ถูกสร้างขึ้น (ค่าเริ่มต้นเป็น zero value ของ type นั้นเสมอ):
+
+```go
+package main
+
+import (
+	"fmt"
+	"reflect"
+)
+
+type User struct {
+	Name string
+	Age  int
+}
+
+func main() {
+	t := reflect.TypeOf(User{})
+	newValue := reflect.New(t) // คืน reflect.Value ที่เป็น pointer ไปยัง User ตัวใหม่ (zero value)
+	fmt.Println("Kind ของ newValue:", newValue.Kind())               // ptr
+	fmt.Println("Kind ของ newValue.Elem():", newValue.Elem().Kind()) // struct
+
+	elem := newValue.Elem()
+	elem.FieldByName("Name").SetString("สมชาย")
+	elem.FieldByName("Age").SetInt(28)
+
+	created := newValue.Interface().(*User)
+	fmt.Printf("สร้างค่าใหม่ได้: %+v\n", created)
+}
+```
+
+ผลลัพธ์:
+
+```
+Kind ของ newValue: ptr
+Kind ของ newValue.Elem(): struct
+สร้างค่าใหม่ได้: &{Name:สมชาย Age:28}
+```
+
+จุดสำคัญที่ต้องสังเกต:
+
+- `reflect.New(t)` คืนค่าเป็น **pointer เสมอ** (`Kind()` เป็น `reflect.Ptr`) เหมือนกับ `new()` ธรรมดา ดังนั้นค่าที่ได้จึง**addressable และ `CanSet()` เป็น `true` ทันที** หลังเรียก `.Elem()` โดยไม่ต้องผ่านขั้นตอนพิเศษเหมือนหัวข้อที่แล้ว
+- `newValue.Interface().(*User)` คือขั้นตอนสุดท้ายที่แปลง `reflect.Value` กลับมาเป็นค่า Go ปกติ (`*User`) ผ่าน type assertion (ทบทวนจาก **Part 014**) เพื่อนำไปใช้งานต่อในโค้ดทั่วไปได้
+
+เทคนิคนี้คือกลไกเบื้องหลังที่ทำให้ `json.Unmarshal` สามารถ `Unmarshal` JSON array เข้า `[]User` ได้ทั้งที่ไม่รู้จำนวนสมาชิกล่วงหน้า — มันใช้ `reflect.New` สร้าง `User` ตัวใหม่ขึ้นมาทีละตัวสำหรับแต่ละ element ใน JSON array แล้วเติมค่าเข้าไปด้วยกลไกเดียวกับที่เรียนในหัวข้อ 7
+
+---
+
+## 9. ข้อควรระวัง: ทำไม Reflection ช้าและทำลาย Type Safety ตอน Compile Time
 
 มาพิสูจน์ด้วยตัวเลขจริงว่า reflection ช้ากว่าการเข้าถึง field ตรงๆ แค่ไหน (การวัดประสิทธิภาพแบบเป็นระบบด้วย `testing.B` จะเรียนเต็มรูปแบบใน **Part 034** บทนี้ขอใช้การจับเวลาแบบง่ายๆ ด้วย `time.Since` ให้เห็นภาพก่อน):
 
@@ -418,7 +470,7 @@ reflect access:  136.951919ms
 
 ---
 
-## 9. เมื่อไหร่ควรใช้ Reflection จริงๆ
+## 10. เมื่อไหร่ควรใช้ Reflection จริงๆ
 
 แม้จะมีข้อเสียเยอะ แต่ก็มีสถานการณ์ที่ reflection เป็นเครื่องมือที่ **เหมาะสมและจำเป็นจริงๆ** เพราะไม่มีทางเลือกอื่นที่ดีกว่า:
 
@@ -441,6 +493,7 @@ reflect access:  136.951919ms
 - **`Kind()` vs `Type()`**: `Type()` คือชื่อเฉพาะของ type (รวม named type) ส่วน `Kind()` คือหมวดหมู่พื้นฐาน (struct, ptr, slice, float64, ...) — ในโค้ดจริงมักเช็คด้วย `Kind()` เสมอเพราะมีจำนวนค่าคงที่
 - อ่าน struct field และ tag ที่ runtime ได้ผ่าน `t.NumField()`, `t.Field(i)`, `field.Tag.Get("...")` — นี่คือกลไกเดียวกับที่ `encoding/json` (Part 025) ใช้อ่าน tag `json:"..."` และที่ GORM (Part 074) จะใช้อ่าน tag `gorm:"..."`
 - แก้ไขค่าผ่าน reflection ต้อง **pointer → `Elem()` → `CanSet()` เป็น true → `Set...()`** เสมอ ถ้าส่งค่าตรงๆ (ไม่ใช่ pointer) จะแก้ไขไม่ได้เลยเพราะเป็นแค่สำเนา
+- **`reflect.New(t)`** สร้าง value ใหม่แบบไดนามิกจาก `reflect.Type` โดยไม่ต้องรู้ concrete type ล่วงหน้า คืนค่าเป็น pointer ที่ addressable ทันที — เป็นกลไกที่ `encoding/json` ใช้สร้าง element ใหม่ตอน `Unmarshal` เข้า slice ของ struct
 - Reflection **ช้ากว่าการเข้าถึงค่าตรงๆ อย่างมาก** (วัดได้จริงเป็นร้อยเท่า) และ**ทำลาย type safety ตอน compile time** เพราะ error กลายเป็น panic ตอนรันแทนที่จะเป็น compile error
 - ใช้ reflection เหมาะกับการเขียน serialization library, ORM, validation library, dependency injection และเครื่องมือ debugging เท่านั้น ไม่ใช่โค้ด business logic ทั่วไป
 
@@ -449,9 +502,10 @@ reflect access:  136.951919ms
 1. เขียนฟังก์ชัน `Describe(x any)` ที่พิมพ์ทั้ง `Type()` และ `Kind()` ของค่าที่ส่งเข้ามา ทดสอบกับ `int`, `string`, named type ของตัวเอง, struct, slice, map, และ pointer แล้วสังเกตความแตกต่างระหว่าง `Type()` กับ `Kind()` ในแต่ละกรณี
 2. ขยายฟังก์ชัน `PrintFields` ในหัวข้อ 5 ให้รองรับ struct ที่มี struct ซ้อนอยู่ข้างใน (nested struct) โดยให้เดินเข้าไปพิมพ์ field ของ struct ที่ซ้อนอยู่ด้วย (ใบ้: เช็คว่า `value.Kind() == reflect.Struct` แล้วเรียกฟังก์ชันตัวเองซ้ำ)
 3. เขียนฟังก์ชัน `SetFieldByTag(x any, tagValue string, newValue any) error` ที่รับ pointer ไปยัง struct, ค่าของ tag `label` ที่ต้องการค้นหา, และค่าใหม่ที่จะ set แล้วค้นหา field ที่มี tag ตรงกันเพื่อแก้ไขค่าให้ (ใช้ความรู้จากหัวข้อ 7)
-4. เขียนโปรแกรมที่จับเวลาเปรียบเทียบการอ่านค่าด้วย reflection กับการอ่านค่าตรงๆ แบบในหัวข้อ 8 แต่เปลี่ยนจำนวนรอบ (`n`) เป็นค่าต่างๆ (100, 10,000, 1,000,000) แล้วสังเกตว่าสัดส่วนความช้าเปลี่ยนไปหรือไม่
+4. เขียนโปรแกรมที่จับเวลาเปรียบเทียบการอ่านค่าด้วย reflection กับการอ่านค่าตรงๆ แบบในหัวข้อ 9 แต่เปลี่ยนจำนวนรอบ (`n`) เป็นค่าต่างๆ (100, 10,000, 1,000,000) แล้วสังเกตว่าสัดส่วนความช้าเปลี่ยนไปหรือไม่
 5. ลองเขียนโค้ดที่ตั้งใจทำให้ reflection panic (เช่น เรียก `.Int()` กับค่าที่เป็น string, หรือเรียก `Set...()` กับค่าที่ `CanSet()` เป็น false) แล้วใช้ `recover()` จาก **Part 017** จับ panic เหล่านั้น พร้อมพิมพ์ข้อความ error ที่ได้ อธิบายว่าทำไมมันไม่ถูกจับเป็น compile error ตั้งแต่แรก
-6. ค้นคว้าเพิ่มเติม: อ่าน documentation ของ `reflect.DeepEqual` (`go doc reflect.DeepEqual`) แล้วลองเขียนโปรแกรมเปรียบเทียบ struct ที่มี slice และ map อยู่ข้างในด้วย `==` ธรรมดา (จะ compile error หรือ panic หรือไม่) เทียบกับการใช้ `reflect.DeepEqual` — อธิบายว่าทำไมถึงต่างกัน
+6. เขียนฟังก์ชัน `NewZeroValue(t reflect.Type) any` ที่ใช้ `reflect.New` (หัวข้อ 8) สร้าง value เปล่าของ type ใดๆ ที่ส่งเข้ามา แล้วทดสอบกับ `reflect.TypeOf(User{})`, `reflect.TypeOf(0)`, และ `reflect.TypeOf("")` พร้อมพิมพ์ผลลัพธ์ที่ได้ในแต่ละกรณี
+7. ค้นคว้าเพิ่มเติม: อ่าน documentation ของ `reflect.DeepEqual` (`go doc reflect.DeepEqual`) แล้วลองเขียนโปรแกรมเปรียบเทียบ struct ที่มี slice และ map อยู่ข้างในด้วย `==` ธรรมดา (จะ compile error หรือ panic หรือไม่) เทียบกับการใช้ `reflect.DeepEqual` — อธิบายว่าทำไมถึงต่างกัน
 
 ---
 
