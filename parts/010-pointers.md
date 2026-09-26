@@ -9,11 +9,12 @@
 3. `new()` เทียบกับ `&T{}`
 4. Pass by value กับ pass by pointer — สาธิตการแก้ไขค่า
 5. Pointer ไปยัง field ของ struct
-6. เมื่อไรควรใช้ pointer receiver เทียบกับ value receiver (preview ของ Part 012)
-7. Pointer กับ `nil`
-8. Pitfall ที่พบบ่อย: คืน pointer ไปยังตัวแปร local ปลอดภัยใน Go เพราะ escape analysis
-9. สรุปสิ่งที่ได้เรียนในบทนี้
-10. แบบฝึกหัดท้ายบท
+6. Pointer ซ้อน pointer (`**T`) และการเปรียบเทียบ pointer ด้วย `==`
+7. เมื่อไรควรใช้ pointer receiver เทียบกับ value receiver (preview ของ Part 012)
+8. Pointer กับ `nil`
+9. Pitfall ที่พบบ่อย: คืน pointer ไปยังตัวแปร local ปลอดภัยใน Go เพราะ escape analysis
+10. สรุปสิ่งที่ได้เรียนในบทนี้
+11. แบบฝึกหัดท้ายบท
 
 ---
 
@@ -202,7 +203,59 @@ func main() {
 
 ---
 
-## 6. เมื่อไรควรใช้ pointer receiver เทียบกับ value receiver (preview ของ Part 012)
+## 6. Pointer ซ้อน pointer (`**T`) และการเปรียบเทียบ pointer ด้วย `==`
+
+### Pointer ซ้อน pointer
+
+Pointer สามารถชี้ไปยัง pointer อีกตัวหนึ่งได้เช่นกัน เรียกว่า **pointer to pointer** เขียน type ด้วย `**T` (pointer สองชั้น) แม้จะพบไม่บ่อยนักในโค้ด Go ทั่วไป (ต่างจาก C ที่ใช้ `**T` บ่อยกว่ามากในการจัดการ array of pointers หรือแก้ไข pointer เอง) แต่ก็มีประโยชน์เมื่อต้องการฟังก์ชันที่แก้ไข**ตัว pointer เอง** ไม่ใช่แค่ค่าที่มันชี้ไป
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+	x := 10
+	p := &x  // p คือ *int ชี้ไปที่ x
+	pp := &p // pp คือ **int ชี้ไปที่ p (pointer ไปยัง pointer)
+
+	fmt.Println(x, *p, **pp) // 10 10 10
+
+	**pp = 20 // แก้ไขผ่านสองชั้น dereference กระทบ x โดยตรง
+	fmt.Println(x) // 20
+}
+```
+
+`**pp` คือการ dereference สองรอบ: รอบแรกได้ `p` (ซึ่งเป็น `*int`) รอบที่สองได้ `x` (ซึ่งเป็น `int`) การแก้ไขค่าที่ `**pp` จึงย้อนไปกระทบ `x` ในที่สุด ในทางปฏิบัติ pointer ซ้อน pointer พบได้บ้างเมื่อฟังก์ชันต้องการเปลี่ยนว่า pointer ตัวแปรหนึ่ง**ชี้ไปที่ไหน**จากภายนอกฟังก์ชัน (เช่นเปลี่ยนให้ `p` ที่เคยชี้ไปที่ `x` เปลี่ยนไปชี้ที่ตัวแปรอื่นแทน) ซึ่งต้องส่ง `&p` (คือ `**int`) เข้าไป มิฉะนั้นการเปลี่ยนค่า `p` ภายในฟังก์ชันจะกระทบแค่ copy ของ `p` เท่านั้น ตามหลักการ pass by value ที่เรียนไปในหัวข้อที่ 4
+
+### เปรียบเทียบ pointer ด้วย `==`
+
+Pointer สองตัวเปรียบเทียบกันด้วย `==` ได้ — ผลลัพธ์จะเป็น `true` ก็ต่อเมื่อทั้งคู่**ชี้ไปยังตำแหน่งหน่วยความจำเดียวกัน** ไม่ใช่แค่ค่าที่ชี้ไปเท่ากัน:
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+	a := 5
+	b := 5
+
+	p1 := &a
+	p2 := &a // ชี้ไปที่ a ตัวเดียวกับ p1
+	p3 := &b // ชี้ไปที่ b คนละตัวแปรกับ a แม้ค่าจะเท่ากัน
+
+	fmt.Println(p1 == p2)   // true - ชี้ไปที่ address เดียวกัน
+	fmt.Println(p1 == p3)   // false - คนละ address แม้ *p1 == *p3 จะเป็น true
+	fmt.Println(*p1 == *p3) // true - ค่าที่ชี้ไปเท่ากัน
+}
+```
+
+ข้อควรระวังคือ `p1 == p3` เปรียบเทียบ **address** (จึงเป็น `false` เพราะ `a` และ `b` เป็นคนละตัวแปร) ในขณะที่ `*p1 == *p3` เปรียบเทียบ **ค่าที่ pointer ชี้ไป** (จึงเป็น `true` เพราะทั้งคู่มีค่าเป็น 5) ความแตกต่างนี้สำคัญมากเมื่อต้องเขียนโค้ดที่เช็คว่า "ตัวแปรสองตัวนี้คือของเดียวกันจริงๆ หรือแค่มีค่าเหมือนกัน"
+
+---
+
+## 7. เมื่อไรควรใช้ pointer receiver เทียบกับ value receiver (preview ของ Part 012)
 
 เมื่อเรียนเรื่อง **method** ใน Part 012 จะพบว่า Go ให้เลือกได้ว่าจะประกาศ method ของ struct ด้วย **value receiver** (`func (c Counter) Method()`) หรือ **pointer receiver** (`func (c *Counter) Method()`) หลักการโดยสรุปที่ควรรู้ไว้ล่วงหน้า (รายละเอียดเต็มอยู่ใน Part 012):
 
@@ -238,7 +291,7 @@ func main() {
 
 ---
 
-## 7. Pointer กับ `nil`
+## 8. Pointer กับ `nil`
 
 Zero value ของ pointer type ใดๆ คือ **`nil`** (หลักการ zero value เดียวกับที่เรียนไปใน Part 003 และเจออีกครั้งกับ slice ใน Part 006 และ map ใน Part 007) `nil` pointer หมายถึง "pointer ที่ยังไม่ได้ชี้ไปยังอะไรเลย"
 
@@ -288,7 +341,7 @@ panic: runtime error: invalid memory address or nil pointer dereference
 
 ---
 
-## 8. Pitfall ที่พบบ่อย: คืน pointer ไปยังตัวแปร local ปลอดภัยใน Go เพราะ escape analysis
+## 9. Pitfall ที่พบบ่อย: คืน pointer ไปยังตัวแปร local ปลอดภัยใน Go เพราะ escape analysis
 
 โปรแกรมเมอร์ที่มาจากภาษา C มักเข้าใจผิดหรือกังวลตอนเริ่มเขียน Go ว่า **การคืน pointer ไปยังตัวแปร local ของฟังก์ชันเป็นเรื่องอันตราย** เพราะใน C การทำแบบนี้เป็น **undefined behavior** ที่รู้จักกันดีในชื่อ "dangling pointer": เมื่อฟังก์ชันจบการทำงาน ตัวแปร local ที่อยู่บน **stack** จะถูกเคลียร์ทิ้งทันที pointer ที่ยังชี้ไปยังตำแหน่งนั้นจึงกลายเป็น pointer ที่ชี้ไปยังหน่วยความจำที่ไม่ได้เป็นของตัวเองอีกต่อไป การ dereference pointer นั้นในภายหลังจึงให้ผลลัพธ์ที่คาดเดาไม่ได้เลย
 
